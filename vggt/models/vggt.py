@@ -25,6 +25,7 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
         enable_depth=True,
         enable_track=False,
         merging=0,
+        merge_ratio=0.9,
         vis_attn_map=False,
     ):
         super().__init__()
@@ -36,6 +37,7 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
             patch_size=patch_size,
             embed_dim=embed_dim,
             merging=merging,
+            merge_ratio=merge_ratio,
             vis_attn_map=vis_attn_map,
         )
 
