@@ -41,6 +41,7 @@ class Block(nn.Module):
         fused_attn: bool = True,
         rope=None,
         merging=0,
+        merge_ratio=0.9,
     ) -> None:
         super().__init__()
 
@@ -56,6 +57,7 @@ class Block(nn.Module):
             qk_norm=qk_norm,
             fused_attn=fused_attn,
             rope=rope,
+            merge_ratio=merge_ratio,
         )
 
         self.ls1 = (
