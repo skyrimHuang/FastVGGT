@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import os
 import sys
+import yaml
 
 # Ensure project root is in sys.path for absolute imports like `vggt.*`
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
@@ -27,12 +28,12 @@ from vggt.utils.eval_utils import (
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--data_dir", type=Path, default="/data/scannetv2/process_scannet"
+        "--data_dir", type=Path, default="/data/sy/scannetv2/process_scannet"
     )
     parser.add_argument(
         "--gt_ply_dir",
         type=Path,
-        default="/data/scannetv2/OpenDataLab___ScanNet_v2/raw/scans",
+        default="/data/sy/scannetv2/OpenDataLab___ScanNet_v2/raw/scans",
     )
     parser.add_argument("--output_path", type=Path, default="./eval_results")
     parser.add_argument("--merging", type=int, default=None)
@@ -40,7 +41,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--depth_conf_thresh",
         type=float,
-        default=3.0,
+        default=1.0,
         help="Depth confidence threshold for filtering low confidence depth values",
     )
     parser.add_argument(
@@ -52,19 +53,19 @@ if __name__ == "__main__":
     parser.add_argument(
         "--input_frame",
         type=int,
-        default=200,
+        default=1000,
         help="Maximum number of frames selected for processing per scene",
     )
     parser.add_argument(
         "--num_scenes",
         type=int,
-        default=50,
+        default=None,
         help="Maximum number of scenes to evaluate",
     )
     parser.add_argument(
         "--ckpt_path",
         type=str,
-        default="./ckpt/model_tracker_fixed_e20.pt",
+        default="/home/sy/code/vggt_0625/ckpt/model_tracker_fixed_e20.pt",
         help="Path to the model checkpoint file",
     )
     parser.add_argument(
@@ -72,18 +73,34 @@ if __name__ == "__main__":
         action="store_true",
         help="Whether to visualize attention maps during inference",
     )
+    parser.add_argument(
+        "--merge_ratio",
+        type=float,
+        default=0.9,
+        help="Token merge ratio (0.0-1.0)",
+    )
     args = parser.parse_args()
     torch.manual_seed(33)
 
     # Scene sampling
-    scannet_scenes = get_all_scenes(args.data_dir, args.num_scenes)
-    print(f"Evaluate {len(scannet_scenes)} scenes")
+    if args.num_scenes is not None:
+        scannet_scenes = get_all_scenes(args.data_dir, args.num_scenes)
+        print(f"Evaluate {len(scannet_scenes)} scenes")
+    else:
+        yaml_path = Path(__file__).parent / "scannet_50.yaml"
+        with open(yaml_path, "r") as f:
+            scannet_scenes = [line.strip() for line in f if line.strip()]
+        print(f"Evaluate {len(scannet_scenes)} scenes from {yaml_path}")
 
     all_scenes_metrics = {"scenes": {}, "average": {}}
     # Force use of bf16 data type
     dtype = torch.bfloat16
     # Load VGGT model
-    model = VGGT(merging=args.merging, vis_attn_map=args.vis_attn_map)
+    model = VGGT(
+        merging=args.merging,
+        merge_ratio=args.merge_ratio,
+        vis_attn_map=args.vis_attn_map,
+    )
     ckpt = torch.load(args.ckpt_path, map_location="cpu")
     incompat = model.load_state_dict(ckpt, strict=False)
     model = model.cuda().eval()
