@@ -45,6 +45,12 @@ def get_args_parser():
     parser.add_argument(
         "--merging", type=int, default=0, help="VGGT aggregator merging steps"
     )
+    parser.add_argument(
+        "--merge_ratio",
+        type=float,
+        default=0.9,
+        help="Token merge ratio (0.0-1.0)",
+    )
     parser.add_argument("--kf", type=int, default=2, help="key frame")
     return parser
 
@@ -91,7 +97,7 @@ def main(args):
     # Force use of bf16 data type
     dtype = torch.bfloat16
     # Load VGGT model
-    model = VGGT(merging=args.merging, enable_point=True)
+    model = VGGT(merging=args.merging, merge_ratio=args.merge_ratio, enable_point=True)
     ckpt = torch.load(args.ckpt_path, map_location="cpu")
 
     # ✅ Fix: load pre-trained weights
