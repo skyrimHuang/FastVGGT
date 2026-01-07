@@ -23,6 +23,10 @@
 - [Sep 3, 2025] Paper release.
 - [Sep 2, 2025] Code release.
 
+## 🔍 Recommendation
+- A new work for processing endless streams with VGGT [InfiniteVGGT](https://github.com/mystorm16/FastVGGT).
+
+
 ## 🔭 Overview
 
 FastVGGT observes **strong similarity** in attention maps and leverages it to design a training-free acceleration method for long-sequence 3D reconstruction, **achieving up to 4× faster inference without sacrificing accuracy.**
