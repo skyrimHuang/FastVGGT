@@ -24,7 +24,7 @@
 - [Sep 2, 2025] Code release.
 
 ## 🔍 Recommendation
-- A new work for processing endless streams with VGGT [InfiniteVGGT](https://github.com/mystorm16/FastVGGT).
+- A new work for processing endless streams with VGGT [InfiniteVGGT](https://github.com/AutoLab-SAI-SJTU/InfiniteVGGT).
 
 
 ## 🔭 Overview
