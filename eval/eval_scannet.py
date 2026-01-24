@@ -65,7 +65,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ckpt_path",
         type=str,
-        default="/home/sy/code/vggt_0625/ckpt/model_tracker_fixed_e20.pt",
+        default="/home/hba/Documents/FastVGGT/ckpt/model_tracker_fixed_e20.pt",
         help="Path to the model checkpoint file",
     )
     parser.add_argument(

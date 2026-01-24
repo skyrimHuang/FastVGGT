@@ -24,7 +24,7 @@ def get_args_parser():
     parser.add_argument(
         "--ckpt_path",
         type=str,
-        default="/home/sy/code/FastVGGT/ckpt/model_tracker_fixed_e20.pt",
+        default="/home/hba/Documents/FastVGGT/ckpt/model_tracker_fixed_e20.pt",
         help="ckpt name",
     )
     parser.add_argument("--device", type=str, default="cuda:0", help="device")
@@ -35,7 +35,7 @@ def get_args_parser():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="/home/sy/code/FastVGGT/eval_results",
+        default="/home/hba/Documents/FastVGGT/eval_results",
         help="value for outdir",
     )
     parser.add_argument("--size", type=int, default=518)
