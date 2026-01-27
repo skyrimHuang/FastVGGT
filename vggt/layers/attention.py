@@ -170,6 +170,8 @@ class Attention(nn.Module):
 
             r = int(x.shape[1] * self.merge_ratio)
 
+            print(f"------------------r: {r}------------------")
+
             m, u = token_merge_bipartite2d(
                 x,
                 self.patch_width,
