@@ -344,7 +344,7 @@ def main():
 
     # Confidence filtering and random downsample
     conf_mask = depth_conf >= args.depth_conf_thresh
-    conf_mask = randomly_limit_trues(conf_mask, args.max_points)
+    # conf_mask = randomly_limit_trues(conf_mask, args.max_points)
 
     points_3d = points_3d[conf_mask]
     points_xyf = points_xyf[conf_mask]
