@@ -11,19 +11,19 @@ from vggt.utils.eval_utils import imread_cv2, shuffle_deque
 class SevenScenes(BaseStereoViewDataset):
     def __init__(
         self,
-        num_seq=1,
-        num_frames=5,
-        min_thresh=10,
-        max_thresh=100,
-        test_id=None,
-        full_video=False,
-        tuple_list=None,
-        seq_id=None,
-        rebuttal=False,
-        shuffle_seed=-1,
-        kf_every=1,
+        num_seq=1,               # 每个场景要生成的序列数量
+        num_frames=5,            # 每个序列包含的帧数
+        min_thresh=10,           # 序列中帧之间的最小时间/距离阈值
+        max_thresh=100,          # 序列中帧之间的最大时间/距离阈值
+        test_id=None,            # 可选的测试ID，用于指定特定测试场景或分割
+        full_video=False,        # 是否使用完整视频序列，否则使用抽样帧
+        tuple_list=None,         # 可选的预定义帧组合列表，用于指定特定的帧对
+        seq_id=None,             # 可选的序列ID，用于指定特定序列
+        rebuttal=False,          # 是否启用反驳模式（特定评估场景）
+        shuffle_seed=-1,         # 随机打乱数据的种子，-1表示不打乱
+        kf_every=1,              # 关键帧间隔，每k帧取一个关键帧
         *args,
-        ROOT,
+        ROOT,                    # 7-Scenes数据集根目录路径
         **kwargs,
     ):
         self.ROOT = ROOT
