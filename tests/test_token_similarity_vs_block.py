@@ -23,6 +23,11 @@ SEQUENCE_LENGTHS = [5, 10, 30, 50, 100]  # List of sequence lengths to test
 BLOCK_LAYERS = list(range(24))  # List of block layers to compute similarity for (0-23)
 TOKEN_SAMPLING_PERCENTAGE = 0.1  # Percentage of tokens to randomly sample for similarity calculation
 MERGE_RATIO = 0.9  # Fixed merge ratio for all experiments
+MAX_TOKEN_SAMPLE = 2048
+PAIRWISE_MATRIX_THRESHOLD = 1024
+PAIR_SAMPLES = 250_000
+PAIR_SAMPLE_MULTIPLIER = 10
+ENABLE_PAIR_SAMPLING = True
 
 # --- Helper Functions ---
 def get_args_parser():
@@ -181,7 +186,8 @@ def calculate_token_similarity(tokens, sampling_percentage=0.1):
         return 0.0
     
     # Determine number of tokens to sample
-    num_sample = min(max(10, int(num_tokens * sampling_percentage)), num_tokens)
+    num_sample_base = min(max(10, int(num_tokens * sampling_percentage)), num_tokens)
+    num_sample = min(num_sample_base, MAX_TOKEN_SAMPLE)
     
     # Randomly sample tokens
     indices = torch.randperm(num_tokens)[:num_sample]
@@ -190,19 +196,25 @@ def calculate_token_similarity(tokens, sampling_percentage=0.1):
     # Normalize tokens
     sampled_tokens = torch.nn.functional.normalize(sampled_tokens, dim=1)
     
-    # Calculate pairwise cosine similarity
-    similarity_matrix = torch.matmul(sampled_tokens, sampled_tokens.T)
-    
-    # Extract upper triangle (excluding diagonal)
-    upper_tri = similarity_matrix.triu(diagonal=1)
-    
-    # Calculate average similarity (only non-zero pairs)
-    num_nonzero_pairs = (upper_tri != 0).sum().item()
-    if num_nonzero_pairs > 0:
-        avg_similarity = upper_tri.sum() / num_nonzero_pairs
-        return avg_similarity.item()
+    if ENABLE_PAIR_SAMPLING and num_sample > PAIRWISE_MATRIX_THRESHOLD:
+        K = min(PAIR_SAMPLES, num_sample * PAIR_SAMPLE_MULTIPLIER)
+        i = torch.randint(0, num_sample, (K,), device=sampled_tokens.device)
+        j = torch.randint(0, num_sample, (K,), device=sampled_tokens.device)
+        mask = i != j
+        if mask.any():
+            sims = (sampled_tokens[i[mask]] * sampled_tokens[j[mask]]).sum(dim=1)
+            return sims.mean().item()
+        else:
+            return 0.0
     else:
-        return 0.0
+        similarity_matrix = torch.matmul(sampled_tokens, sampled_tokens.T)
+        upper_tri = similarity_matrix.triu(diagonal=1)
+        num_nonzero_pairs = (upper_tri != 0).sum().item()
+        if num_nonzero_pairs > 0:
+            avg_similarity = upper_tri.sum() / num_nonzero_pairs
+            return avg_similarity.item()
+        else:
+            return 0.0
 
 def generate_heatmap(data, block_layers, sequence_lengths, output_path):
     """Generate and save heatmap of token similarity"""
