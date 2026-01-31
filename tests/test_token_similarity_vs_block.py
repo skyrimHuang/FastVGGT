@@ -19,14 +19,28 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 # --- Global Variables ---
+# 实验使用的序列长度列表；控制每次实验输入的视频帧数
 SEQUENCE_LENGTHS = [5, 10, 30, 50, 100]  # List of sequence lengths to test
+# 要计算相似度的模型块层索引集合；使用模型中的绝对层索引
+# 脚本内部会自动只对 aggregator.global_blocks 进行计算，跳过 frame_blocks
 BLOCK_LAYERS = list(range(24))  # List of block layers to compute similarity for (0-23)
+# 从所有可用 token 中按比例随机采样的比例；用于确定初始采样规模
+# 过大可能导致计算开销增大，通常结合 MAX_TOKEN_SAMPLE 共同控制
 TOKEN_SAMPLING_PERCENTAGE = 0.1  # Percentage of tokens to randomly sample for similarity calculation
+# 模型 VGGT 的合并比例参数；与本测试的相似度计算逻辑无关，但影响模型前向行为
 MERGE_RATIO = 0.9  # Fixed merge ratio for all experiments
+# 参与相似度计算的 token 数量上限（最终采样规模的硬限制），用于防止 s×s 矩阵或配对采样规模过大
 MAX_TOKEN_SAMPLE = 2048
+# 当采样的 token 数量超过该阈值时，不再构建完整的 s×s 相似度矩阵，切换为配对采样近似
+# 该值用于控制是否走近似路径，避免 O(n^2) 的内存与计算
 PAIRWISE_MATRIX_THRESHOLD = 1024
+# 配对采样的最大样本对数上限 K；数值越大近似越稳定，但计算时间也越长
+# 与特征维度 d 成线性关系，默认 250000 在常见设置下较为稳妥
 PAIR_SAMPLES = 250_000
+# 配对采样的规模随采样 token 数量的倍率上限；实际 K = min(PAIR_SAMPLES, num_sample * PAIR_SAMPLE_MULTIPLIER)
+# 当采样 token 很少时避免过度采样，当很多时避免超过上限
 PAIR_SAMPLE_MULTIPLIER = 10
+# 是否启用配对采样近似；关闭则始终构建完整相似度矩阵（可能非常慢/占用显存）
 ENABLE_PAIR_SAMPLING = True
 
 # --- Helper Functions ---
