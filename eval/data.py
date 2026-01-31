@@ -127,10 +127,14 @@ class SevenScenes(BaseStereoViewDataset):
         if self.shuffle_seed >= 0:
             imgs_idxs = shuffle_deque(imgs_idxs)
 
+        count = 0
         while len(imgs_idxs) > 0:
+            # If not full video and we have reached the desired number of frames, break
+            if not self.full_video and count >= self.num_frames:
+                break
             im_idx = imgs_idxs.popleft()
             impath = osp.join(self.ROOT, scene_id, f"frame-{im_idx}.color.png")
-            depthpath = osp.join(self.ROOT, scene_id, f"frame-{im_idx}.depth.proj.png")
+            depthpath = osp.join(self.ROOT, scene_id, f"frame-{im_idx}.depth.png")
             posepath = osp.join(self.ROOT, scene_id, f"frame-{im_idx}.pose.txt")
 
             rgb_image = imread_cv2(impath)
@@ -175,6 +179,7 @@ class SevenScenes(BaseStereoViewDataset):
                     instance=impath,
                 )
             )
+            count += 1
         return views
 
 
@@ -288,7 +293,11 @@ class NRGBD(BaseStereoViewDataset):
             imgs_idxs = shuffle_deque(imgs_idxs)
         views = []
 
+        count = 0
         while len(imgs_idxs) > 0:
+            # If not full video and we have reached the desired number of frames, break
+            if not self.full_video and count >= self.num_frames:
+                break
             im_idx = imgs_idxs.popleft()
 
             impath = osp.join(self.ROOT, scene_id, "images", f"img{im_idx}.png")
@@ -334,5 +343,6 @@ class NRGBD(BaseStereoViewDataset):
                     instance=impath,
                 )
             )
+            count += 1
 
         return views

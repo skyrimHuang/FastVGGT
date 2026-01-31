@@ -17,24 +17,27 @@ ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
+import sys
+sys.path.append(os.path.join(ROOT_DIR, "eval"))
+
 from data import SevenScenes
 from utils import accuracy, completion
 from vggt.models.vggt import VGGT
 from criterion import Regr3D_t_ScaleShiftInv, L21
 
 # --- Experiment Parameters ---
-SEQUENCE_LENGTHS = [5, 10, 30, 50, 100]
-MERGE_RATIOS = [0.3, 0.6, 0.9]
+SEQUENCE_LENGTHS = [5, 10, 30, 50, 100, 200] # 输入帧的数量， 300就OOM了
+MERGE_RATIOS = [0,0.1,0.2, 0.3,0.4,0.5, 0.6, 0.7, 0.8, 0.9]
 
 def get_args_parser():
     parser = argparse.ArgumentParser("Test Merge Rate vs. Sequence Length", add_help=False)
-    parser.add_argument("--data_root", type=str, required=True, help="Path to the 7-Scenes dataset root")
-    parser.add_argument("--ckpt_path", type=str, required=True, help="Path to the model checkpoint")
-    parser.add_argument("--output_dir", type=str, default="e:/GraduateProject/FastVGGT/tests/results", help="Directory to save results")
+    parser.add_argument("--data_root", type=str, default="/home/hba/Documents/Dataset/7_scenes", help="Path to the 7-Scenes dataset root")
+    parser.add_argument("--ckpt_path", type=str, default="/home/hba/Documents/FastVGGT/ckpt/model_tracker_fixed_e20.pt", help="Path to the model checkpoint")
+    parser.add_argument("--output_dir", type=str, default="/home/hba/Documents/FastVGGT/tests/tests_result/7Scenes_merge_rateVs_seq_len", help="Directory to save results")
     parser.add_argument("--device", type=str, default="cuda:0", help="device")
     parser.add_argument("--size", type=int, default=518, help="Image size for the model")
     parser.add_argument("--kf", type=int, default=2, help="Keyframe interval")
-    parser.add_argument("--use_proj", action="store_true", help="Use Umeyama alignment instead of only ICP")
+    parser.add_argument("--use_proj", action="store_false", default=True, help="Disable Umeyama alignment (use only ICP)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     return parser
 
@@ -75,7 +78,7 @@ def main(args):
 
     # --- Determine Data Type ---    
     # Use global dtype but override based on GPU capability if needed
-    dtype = GLOBAL_DTYPE
+    dtype = torch.float16
     if dtype == torch.bfloat16 and torch.cuda.get_device_capability()[0] < 8:
         print("WARNING: bfloat16 not supported on this GPU, falling back to float16")
         dtype = torch.float16
@@ -92,8 +95,9 @@ def main(args):
                 split="test",
                 ROOT=args.data_root,
                 resolution=resolution,
-                num_seq=seq_len,
-                full_video=True,
+                num_seq=1,  # 每个场景需要使用的序列个数
+                num_frames=seq_len,
+                full_video=False,
                 kf_every=args.kf,
             )
         except Exception as e:

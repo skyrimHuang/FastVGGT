@@ -41,7 +41,7 @@ def get_args_parser():
     parser.add_argument("--size", type=int, default=518)
     parser.add_argument("--revisit", type=int, default=1, help="revisit times")
     parser.add_argument("--freeze", action="store_true")
-    parser.add_argument("--use_proj", action="store_true")
+    parser.add_argument("--use_proj", action="store_false", default=True, help="Disable Umeyama alignment (use only ICP)")
     parser.add_argument(
         "--merging", type=int, default=0, help="VGGT aggregator merging steps"
     )
