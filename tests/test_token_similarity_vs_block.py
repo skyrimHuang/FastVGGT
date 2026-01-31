@@ -190,7 +190,7 @@ def calculate_token_similarity(tokens, sampling_percentage=0.1):
     num_sample = min(num_sample_base, MAX_TOKEN_SAMPLE)
     
     # Randomly sample tokens
-    indices = torch.randperm(num_tokens)[:num_sample]
+    indices = torch.randperm(num_tokens, device=tokens_reshaped.device)[:num_sample]
     sampled_tokens = tokens_reshaped[indices]
     
     # Normalize tokens
@@ -343,7 +343,8 @@ def main(args):
                     
                     # Forward pass to trigger hooks
                     with torch.no_grad(), torch.cuda.amp.autocast(dtype=dtype):
-                        model(scannet_data["vgg_input"])
+                        vgg_input = scannet_data["vgg_input"].to(args.device)
+                        model(vgg_input)
                     
                     # Calculate token similarity for each global block layer
                     for block_layer in block_layers:
