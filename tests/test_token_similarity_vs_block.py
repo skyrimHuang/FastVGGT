@@ -331,7 +331,8 @@ def main(args):
                     
                     # Forward pass to trigger hooks
                     with torch.no_grad(), torch.cuda.amp.autocast(dtype=dtype):
-                        model(scannet_data["vgg_input"])
+                        vgg_input = scannet_data["vgg_input"].to(args.device)
+                        model(vgg_input)
                     
                     # Calculate token similarity for each global block layer
                     for block_layer in block_layers:
