@@ -184,7 +184,7 @@ def calculate_token_similarity(tokens, sampling_percentage=0.1):
     num_sample = min(max(10, int(num_tokens * sampling_percentage)), num_tokens)
     
     # Randomly sample tokens
-    indices = torch.randperm(num_tokens)[:num_sample]
+    indices = torch.randperm(num_tokens, device=tokens_reshaped.device)[:num_sample]
     sampled_tokens = tokens_reshaped[indices]
     
     # Normalize tokens
