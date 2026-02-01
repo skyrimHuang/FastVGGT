@@ -37,7 +37,12 @@ def get_args_parser():
     parser.add_argument("--device", type=str, default="cuda:0", help="device")
     parser.add_argument("--size", type=int, default=518, help="Image size for the model")
     parser.add_argument("--kf", type=int, default=2, help="Keyframe interval")
-    parser.add_argument("--use_proj", action="store_false", default=True, help="Disable Umeyama alignment (use only ICP)")
+    parser.add_argument(
+        "--disable_proj",
+        action="store_true",
+        default=False,
+        help="Disable Umeyama alignment (use only ICP)",
+    )
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     return parser
 
@@ -76,14 +81,18 @@ def main(args):
         print("Please update the --ckpt_path argument.")
         return
 
-    # --- Determine Data Type ---    
-    # Use global dtype but override based on GPU capability if needed
+    # --- Determine Data Type ---
+    # Use float16 by default (bf16 is not used on this machine)
     dtype = torch.float16
     if dtype == torch.bfloat16 and torch.cuda.get_device_capability()[0] < 8:
         print("WARNING: bfloat16 not supported on this GPU, falling back to float16")
         dtype = torch.float16
     
     model = model.to(args.device).eval().to(dtype)
+    # Update patch dimensions to match the dataset resolution
+    patch_width = resolution[0] // 14
+    patch_height = resolution[1] // 14
+    model.update_patch_dimensions(patch_width, patch_height)
     criterion = Regr3D_t_ScaleShiftInv(L21, norm_mode=False, gt_scale=True)
 
     # --- Experiment Loop ---
@@ -260,7 +269,7 @@ def main(args):
                         continue
 
                     # --- Umeyama Alignment (from eval_7andN.py) ---
-                    if args.use_proj:
+                    if not args.disable_proj:
                         def umeyama_alignment(
                             src: np.ndarray, dst: np.ndarray, with_scale: bool = True
                         ):

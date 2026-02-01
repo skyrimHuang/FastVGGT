@@ -50,7 +50,7 @@ def get_args_parser():
     parser.add_argument("--device", type=str, default="cuda:0", help="device")
     
     # Parameters from eval_scannet.py with default values
-    parser.add_argument("--merging", type=int, default=None, help="Merging parameter")
+    parser.add_argument("--merging", type=int, default=0, help="Merging parameter")
     parser.add_argument("--plot", type=bool, default=True, help="Generate plots")
     parser.add_argument("--depth_conf_thresh", type=float, default=1.0, 
                        help="Depth confidence threshold for filtering low confidence depth values")
@@ -72,8 +72,11 @@ def update_model_merge_ratio(model, merge_ratio):
         model: VGGT model instance
         merge_ratio: Merge ratio to set (0.0-1.0)
     """
-    # Update the merge ratio in the model
-    model.merge_ratio = merge_ratio
+    # Update the merge ratio in the model/aggregator
+    if hasattr(model, "merge_ratio"):
+        model.merge_ratio = merge_ratio
+    if hasattr(model, "aggregator"):
+        model.aggregator.merge_ratio = merge_ratio
     
     # Update attention layers with the new merge ratio
     for block in model.aggregator.frame_blocks:
@@ -99,7 +102,12 @@ def process_scene_with_oom_protection(model, scene_data, seq_len, merge_ratio, a
         Dictionary of metrics or None if processing failed
     """
     try:
-        scene, scene_dir, image_paths, poses_gt, first_gt_pose, available_pose_frame_ids = scene_data
+        scene = scene_data["scene"]
+        scene_dir = scene_data["scene_dir"]
+        image_paths = scene_data["image_paths"]
+        poses_gt = scene_data["poses_gt"]
+        first_gt_pose = scene_data["first_gt_pose"]
+        available_pose_frame_ids = scene_data["available_pose_frame_ids"]
         
         # Frame filtering based on sequence length
         selected_frame_ids, selected_image_paths, selected_pose_indices = build_frame_selection(
@@ -127,18 +135,21 @@ def process_scene_with_oom_protection(model, scene_data, seq_len, merge_ratio, a
         model.update_patch_dimensions(patch_width, patch_height)
         
         # Inference + Reconstruction with timing
-        start_time = time.time()
         (
             extrinsic_np,
             intrinsic_np,
             all_world_points,
             all_point_colors,
             all_cam_to_world_mat,
-            _,
+            inference_time_ms,
         ) = infer_vggt_and_reconstruct(
-            model, vgg_input, dtype, args.depth_conf_thresh, selected_image_paths
+            model,
+            vgg_input,
+            dtype,
+            args.depth_conf_thresh,
+            selected_image_paths,
+            device=torch.device(args.device),
         )
-        inference_time_ms = (time.time() - start_time) * 1000
         
         # Check if we got valid results
         if not all_cam_to_world_mat or not all_world_points:
@@ -262,12 +273,16 @@ def main(args):
         return
     
     # Force use of bf16 data type
-    dtype = torch.bfloat16
-    if dtype == torch.bfloat16 and torch.cuda.get_device_capability()[0] < 8:
-        print("WARNING: bfloat16 not supported on this GPU, falling back to float16")
-        dtype = torch.float16
-    
-    model = model.to(args.device).eval().to(dtype)
+    device = torch.device(args.device)
+    if device.type == "cuda":
+        dtype = torch.bfloat16
+        if torch.cuda.get_device_capability(device)[0] < 8:
+            print("WARNING: bfloat16 not supported on this GPU, falling back to float16")
+            dtype = torch.float16
+    else:
+        dtype = torch.float32
+
+    model = model.to(device).eval().to(dtype)
     
     # --- Experiment Loop ---
     # Use global variables for test parameters

@@ -1,4 +1,5 @@
 from collections import deque
+import contextlib
 from PIL import Image
 import cv2
 import io
@@ -647,6 +648,7 @@ def infer_vggt_and_reconstruct(
     dtype: torch.dtype,
     depth_conf_thresh: float,
     image_paths: list = None,
+    device: Optional[torch.device] = None,
 ) -> Tuple[
     np.ndarray,
     np.ndarray,
@@ -655,12 +657,28 @@ def infer_vggt_and_reconstruct(
     List[np.ndarray],
     float,
 ]:
-    torch.cuda.synchronize()
+    if device is None:
+        device = next(model.parameters()).device
+    device_type = device.type
+
+    if device_type == "cuda" and torch.cuda.is_available():
+        torch.cuda.synchronize()
     start = time.time()
-    with torch.cuda.amp.autocast(dtype=dtype):
-        vgg_input_cuda = vgg_input.cuda().to(torch.bfloat16)
-        predictions = model(vgg_input_cuda, image_paths=image_paths)
-    torch.cuda.synchronize()
+
+    use_autocast = device_type == "cuda" and dtype in (torch.float16, torch.bfloat16)
+    autocast_ctx = (
+        torch.cuda.amp.autocast(dtype=dtype) if use_autocast else contextlib.nullcontext()
+    )
+    with autocast_ctx:
+        vgg_input_device = (
+            vgg_input.to(device=device, dtype=dtype)
+            if dtype is not None
+            else vgg_input.to(device=device)
+        )
+        predictions = model(vgg_input_device, image_paths=image_paths)
+
+    if device_type == "cuda" and torch.cuda.is_available():
+        torch.cuda.synchronize()
     end = time.time()
     inference_time_ms = (end - start) * 1000.0
 
