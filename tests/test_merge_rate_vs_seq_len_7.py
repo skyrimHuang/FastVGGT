@@ -26,8 +26,8 @@ from vggt.models.vggt import VGGT
 from criterion import Regr3D_t_ScaleShiftInv, L21
 
 # --- Experiment Parameters ---
-SEQUENCE_LENGTHS = [5, 10, 30, 50, 100, 200] # 输入帧的数量， 300就OOM了
-MERGE_RATIOS = [0,0.1,0.2, 0.3,0.4,0.5, 0.6, 0.7, 0.8, 0.9]
+SEQUENCE_LENGTHS = [21,22,23,24,25] # 输入帧的数量， 300就OOM了
+MERGE_RATIOS = [0, 0.1,0.2, 0.3,0.4,0.5, 0.6, 0.7, 0.8, 0.9]
 
 def get_args_parser():
     parser = argparse.ArgumentParser("Test Merge Rate vs. Sequence Length", add_help=False)
@@ -57,13 +57,16 @@ def main(args):
         torch.cuda.manual_seed_all(args.seed)
 
     os.makedirs(args.output_dir, exist_ok=True)
-    results = []
+    # Incremental CSV output setup
+    csv_path = os.path.join(args.output_dir, "merge_rate_vs_seq_len_results.csv")
+    if os.path.exists(csv_path):
+        os.remove(csv_path)
 
     # --- Data Loading ---
     if args.size == 512:
         resolution = (512, 384)
     elif args.size == 224:
-        resolution = 224
+        resolution = (224, 224)
     elif args.size == 518:
         resolution = (518, 392)
     else:
@@ -362,7 +365,7 @@ def main(args):
 
                 print(f"Avg Acc: {avg_acc:.4f}, Avg Comp: {avg_comp:.4f}, Avg NC1: {avg_nc1:.4f}, Avg NC2: {avg_nc2:.4f}, Avg Runtime: {avg_runtime:.2f}ms")
 
-                results.append({
+                result_row = {
                     "sequence_length": seq_len,
                     "merge_ratio": merge_ratio,
                     "accuracy": avg_acc,
@@ -374,17 +377,17 @@ def main(args):
                     "normal_consistency2": avg_nc2,
                     "normal_consistency2_median": avg_nc2_med,
                     "runtime_ms": avg_runtime
-                })
+                }
+
+                # Incremental CSV write
+                df = pd.DataFrame([result_row])
+                df.to_csv(csv_path, mode="a", header=not os.path.exists(csv_path), index=False)
             
             # --- Memory Management ---
             torch.cuda.empty_cache()
 
     # --- Save Results to CSV ---
-    if results:
-        df = pd.DataFrame(results)
-        csv_path = os.path.join(args.output_dir, "merge_rate_vs_seq_len_results.csv")
-        # index=False saves the header (column names) but not the row numbers
-        df.to_csv(csv_path, index=False)
+    if os.path.exists(csv_path):
         print(f"Results saved to {csv_path}")
 
 if __name__ == "__main__":

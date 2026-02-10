@@ -289,7 +289,9 @@ def main(args):
     tokens, hooks = setup_model_hooks(model, block_layers)
     
     # --- Experiment Results ---
-    results = []
+    csv_path = os.path.join(args.output_dir, "token_similarity_results.csv")
+    if os.path.exists(csv_path):
+        os.remove(csv_path)
     
     # --- Experiment Loop ---
     for seq_len in sequence_lengths:
@@ -332,12 +334,20 @@ def main(args):
                                 
                                 if block_name in tokens and tokens[block_name] is not None:
                                     similarity = calculate_token_similarity(tokens[block_name], args.token_sampling_percentage)
-                                    results.append({
+                                    result_row = {
                                         "dataset": "7-Scenes",
                                         "sequence_length": seq_len,
                                         "block_layer": block_layer,
                                         "token_similarity": similarity
-                                    })
+                                    }
+
+                                    df = pd.DataFrame([result_row])
+                                    df.to_csv(
+                                        csv_path,
+                                        mode="a",
+                                        header=not os.path.exists(csv_path),
+                                        index=False,
+                                    )
                     
                     # Clear tokens for next iteration
                     for key in tokens:
@@ -371,12 +381,20 @@ def main(args):
                                 
                                 if block_name in tokens and tokens[block_name] is not None:
                                     similarity = calculate_token_similarity(tokens[block_name], args.token_sampling_percentage)
-                                    results.append({
+                                    result_row = {
                                         "dataset": "ScanNet",
                                         "sequence_length": seq_len,
                                         "block_layer": block_layer,
                                         "token_similarity": similarity
-                                    })
+                                    }
+
+                                    df = pd.DataFrame([result_row])
+                                    df.to_csv(
+                                        csv_path,
+                                        mode="a",
+                                        header=not os.path.exists(csv_path),
+                                        index=False,
+                                    )
                     
                     # Clear tokens for next iteration
                     for key in tokens:
@@ -394,13 +412,10 @@ def main(args):
         hook.remove()
     
     # --- Save Results ---
-    if results:
-        # Save to CSV
-        df = pd.DataFrame(results)
-        csv_path = os.path.join(args.output_dir, "token_similarity_results.csv")
-        df.to_csv(csv_path, index=False)
+    if os.path.exists(csv_path):
+        df = pd.read_csv(csv_path)
         print(f"Results saved to {csv_path}")
-        
+
         # Generate and save heatmaps for each dataset
         datasets = df["dataset"].unique()
         for dataset in datasets:
