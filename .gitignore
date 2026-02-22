@@ -42,6 +42,7 @@ share/python-wheels/
 *.egg
 MANIFEST
 strategy_eval/
+tests_result/
 
 # PyInstaller
 # Usually these files are written by a python script from a template
