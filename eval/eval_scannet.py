@@ -28,14 +28,14 @@ from vggt.utils.eval_utils import (
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--data_dir", type=Path, default="/data/sy/scannetv2/process_scannet"
+        "--data_dir", type=Path, default="/home/hba/Documents/Dataset/ScanNet/scans"
     )
     parser.add_argument(
         "--gt_ply_dir",
         type=Path,
-        default="/data/sy/scannetv2/OpenDataLab___ScanNet_v2/raw/scans",
+        default="/home/hba/Documents/Dataset/ScanNet/scans",
     )
-    parser.add_argument("--output_path", type=Path, default="./eval_results")
+    parser.add_argument("--output_path", type=Path, default="./tests/tests_result/scannet_eval")
     parser.add_argument("--merging", type=int, default=None)
     parser.add_argument("--plot", type=bool, default=True)
     parser.add_argument(
@@ -53,7 +53,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--input_frame",
         type=int,
-        default=1000,
+        default=100,
         help="Maximum number of frames selected for processing per scene",
     )
     parser.add_argument(
@@ -94,7 +94,7 @@ if __name__ == "__main__":
 
     all_scenes_metrics = {"scenes": {}, "average": {}}
     # Force use of bf16 data type
-    dtype = torch.bfloat16
+    dtype = torch.float16
     # Load VGGT model
     model = VGGT(
         merging=args.merging,
@@ -104,10 +104,10 @@ if __name__ == "__main__":
     ckpt = torch.load(args.ckpt_path, map_location="cpu")
     incompat = model.load_state_dict(ckpt, strict=False)
     model = model.cuda().eval()
-    model = model.to(torch.bfloat16)
+    model = model.to(torch.float16)
 
     # Process each scene
-    for scene in scannet_scenes:
+    for scene in scannet_scenes[:2]:
         scene_dir = args.data_dir / f"{scene}"
         output_scene_dir = args.output_path / f"input_frame_{args.input_frame}" / scene
         if (output_scene_dir / "metrics.json").exists():
