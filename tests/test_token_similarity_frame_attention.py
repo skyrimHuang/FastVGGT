@@ -80,7 +80,7 @@ PATH_FOR_SCANNET = "/home/hba/Documents/Dataset/ScanNet/scans"
 # --- Helper Functions ---
 
 def get_args_parser():
-    parser = argparse.ArgumentParser("Test Token Similarity vs Block Index vs Sequence Length (Frame 0 vs Others)", add_help=False)
+    parser = argparse.ArgumentParser("Test Frame Attention Token Similarity vs Block Index vs Sequence Length", add_help=False)
     # General arguments
     parser.add_argument("--ckpt_path", type=str, default="/home/hba/Documents/FastVGGT/ckpt/model_tracker_fixed_e20.pt", help="Path to the model checkpoint")
 
@@ -105,7 +105,7 @@ def get_args_parser():
                        help="Comma-separated list of sequence lengths to test")
     
     parser.add_argument("--block_layers", type=str, default="0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23", 
-                       help="Comma-separated list of block layers to compute similarity for")
+                       help="Comma-separated list of frame block layers to compute similarity for")
     
     parser.add_argument("--token_sampling_percentage", type=float, default=0.1, 
                        help="Percentage of tokens to randomly sample for similarity calculation")
@@ -242,10 +242,10 @@ def load_images(
     return torch.cat(all_images, dim=0), all_image_paths
 
 def setup_model_hooks(model, block_layers):
-    """Set up hooks to extract tokens from specified global block layers only.
+    """Set up hooks to extract tokens from specified frame block layers only.
     
-    Note: block_layers indices refer to global_block indices (0-23 for 24 global blocks),
-    NOT the absolute block indices in the model.
+    Note: block_layers indices refer to frame_block indices (0-12 for frame blocks),
+    NOT the global_block indices.
     """
     tokens = {}
     
@@ -263,137 +263,131 @@ def setup_model_hooks(model, block_layers):
     # Register hooks for specified block layers
     hooks = []
     
-    # Check if model has aggregator with global_blocks
-    if hasattr(model, 'aggregator') and hasattr(model.aggregator, 'global_blocks'):
-        # Register hooks for global blocks using their local indices
-        for i, block in enumerate(model.aggregator.global_blocks):
-            # Compare local global_block index (i) with block_layers
+    # Check if model has aggregator with frame_blocks
+    if hasattr(model, 'aggregator') and hasattr(model.aggregator, 'frame_blocks'):
+        # Register hooks for frame blocks using their local indices
+        for i, block in enumerate(model.aggregator.frame_blocks):
+            # Compare local frame_block index (i) with block_layers
             if i in block_layers:
-                hook = block.register_forward_hook(hook_fn(f"global_block_{i}"))
+                hook = block.register_forward_hook(hook_fn(f"frame_block_{i}"))
                 hooks.append(hook)
+    else:
+        print("Warning: model does not have frame_blocks. Skipping hook setup.")
     
     return tokens, hooks
 
-def calculate_token_similarity_frame0_vs_others(tokens, seq_len, sampling_percentage=0.1, num_repeats=5, debug=False):
-    """计算 Frame 0 token 与其他帧 token 之间的相似度。
+def calculate_token_similarity(tokens, seq_len, sampling_percentage=0.1, num_repeats=5, debug=False):
+    """计算 frame block 中帧内 token 的相似度（不计算帧间相似度）。
     
     关键特征：
-    - Frame 0 的 token 与其他帧（Frame 1, 2, ..., T-1）的 token 配对
-    - 每个配对中，一个来自 Frame 0，另一个来自其他帧
-    - 计算所有这样的配对的平均余弦相似度
+    - 将 tokens 按帧分割
+    - 对每一帧内部的 token 计算相似度
+    - 对所有帧的相似度求平均
     
     Args:
-        tokens: 模型 hook 输出的 token 张量，形状 [总token数, D]（帧已混合）
+        tokens: 模型 hook 输出的 token 张量，形状 [B*T, H, W, D] 或 [B*T, N, D]
         seq_len: 序列长度 (帧数)
         sampling_percentage: 采样百分比 (0.0-1.0)
         num_repeats: 独立采样运行次数（默认：5）
         debug: 是否打印调试信息
     
     Returns:
-        float: token 相似度平均值
+        float: 所有帧平均的 token 相似度
     """
     if tokens is None or tokens.numel() == 0:
         return 0.0
     
     # 获取 token 维度信息
-    if len(tokens.shape) == 4:  # (B*T, H, W, C) - 应该已经被合并
-        tokens_flat = tokens.view(-1, tokens.shape[-1])
-    elif len(tokens.shape) == 3:  # (B*T, N, C) - 应该已经被合并
-        tokens_flat = tokens.view(-1, tokens.shape[-1])
-    elif len(tokens.shape) == 2:  # (总token数, D) - 已是平坦形式
-        tokens_flat = tokens
+    if len(tokens.shape) == 4:  # (B*T, H, W, C)
+        B_times_T, H, W, C = tokens.shape
+        tokens_flat = tokens.view(-1, C)
+        tokens_per_frame = H * W
+    elif len(tokens.shape) == 3:  # (B*T, N, C)
+        B_times_T, N, C = tokens.shape
+        tokens_flat = tokens.view(-1, C)
+        tokens_per_frame = N
     else:
         return 0.0
     
     total_tokens = tokens_flat.shape[0]
     feature_dim = tokens_flat.shape[1]
     
-    # 计算每帧的 token 数（假设帧均匀分布）
-    tokens_per_frame = total_tokens // seq_len
+    # 计算每帧的 token 数
+    tokens_per_frame_actual = total_tokens // seq_len
     remainder = total_tokens % seq_len
     
     if debug:
         print(f"  [DEBUG] Token shape: {tokens.shape} -> flattened: {tokens_flat.shape}")
-        print(f"  [DEBUG] Total tokens: {total_tokens}, Sequence length: {seq_len}")
-        print(f"  [DEBUG] Tokens per frame: {tokens_per_frame} (remainder: {remainder})")
+        print(f"  [DEBUG] Sequence length: {seq_len}, Tokens per frame: {tokens_per_frame_actual} (remainder: {remainder})")
         print(f"  [DEBUG] Feature dimension: {feature_dim}")
     
-    # 按帧分割 tokens（假设帧在 token 维度连续）
-    # Frame 0: indices [0, tokens_per_frame)
-    # Frame 1: indices [tokens_per_frame, 2*tokens_per_frame)
-    # ...
-    frame0_end = tokens_per_frame
-    frame0_tokens = tokens_flat[:frame0_end]  # Frame 0 的所有 tokens
+    # 按帧分割并计算每帧的相似度
+    frame_similarities = []
     
-    # 其他帧（Frame 1 到 Frame T-1）
-    other_frames_tokens = tokens_flat[frame0_end:]  # 其他帧的所有 tokens
+    for frame_idx in range(seq_len):
+        # 提取当前帧的 tokens
+        frame_start = frame_idx * tokens_per_frame_actual
+        frame_end = frame_start + tokens_per_frame_actual
+        frame_tokens = tokens_flat[frame_start:frame_end]  # [tokens_per_frame, D]
+        
+        if frame_tokens.shape[0] == 0:
+            continue
+        
+        # 决定采样数量
+        num_frame_tokens = frame_tokens.shape[0]
+        num_sample_base = min(max(10, int(num_frame_tokens * sampling_percentage)), num_frame_tokens)
+        num_sample = min(num_sample_base, MAX_TOKEN_SAMPLE)
+        
+        if debug and frame_idx == 0:
+            print(f"  [DEBUG] Frame 0: {num_frame_tokens} tokens, sampling {num_sample} ({sampling_percentage*100:.1f}%)")
+        
+        # 执行多次独立采样
+        frame_repeat_similarities = []
+        
+        for repeat_idx in range(num_repeats):
+            # 随机采样 token
+            indices = torch.randperm(num_frame_tokens, device=frame_tokens.device)[:num_sample]
+            sampled_tokens = frame_tokens[indices]
+            
+            # 归一化 token 用于余弦相似度
+            sampled_tokens = torch.nn.functional.normalize(sampled_tokens, dim=1)
+            
+            if ENABLE_PAIR_SAMPLING and num_sample > PAIRWISE_MATRIX_THRESHOLD:
+                # 配对采样
+                K = min(PAIR_SAMPLES, num_sample * PAIR_SAMPLE_MULTIPLIER)
+                i = torch.randint(0, num_sample, (K,), device=sampled_tokens.device)
+                j = (i + torch.randint(1, num_sample, (K,), device=sampled_tokens.device)) % num_sample
+                sims = (sampled_tokens[i] * sampled_tokens[j]).sum(dim=1)
+                avg_sim = sims.mean().item()
+            else:
+                # 完整相似度矩阵
+                similarity_matrix = torch.matmul(sampled_tokens, sampled_tokens.T)
+                upper_tri = similarity_matrix.triu(diagonal=1)
+                num_pairs = num_sample * (num_sample - 1) // 2
+                avg_sim = upper_tri.sum().item() / num_pairs if num_pairs > 0 else 0.0
+            
+            frame_repeat_similarities.append(avg_sim)
+        
+        # 该帧的平均相似度（多次采样的平均）
+        frame_avg_sim = np.mean(frame_repeat_similarities)
+        frame_similarities.append(frame_avg_sim)
+        
+        if debug and frame_idx == 0:
+            print(f"  [DEBUG] Frame 0 similarity (across {num_repeats} repeats): mean={frame_avg_sim:.4f}, std={np.std(frame_repeat_similarities):.4f}")
+    
+    # 所有帧相似度的平均值
+    if len(frame_similarities) == 0:
+        return 0.0
+    
+    final_avg = np.mean(frame_similarities)
     
     if debug:
-        print(f"  [DEBUG] Frame 0 tokens shape: {frame0_tokens.shape}")
-        print(f"  [DEBUG] Other frames tokens shape: {other_frames_tokens.shape}")
-    
-    # 归一化
-    frame0_tokens = torch.nn.functional.normalize(frame0_tokens, dim=1)
-    other_frames_tokens = torch.nn.functional.normalize(other_frames_tokens, dim=1)
-    
-    num_frame0_tokens = frame0_tokens.shape[0]
-    num_other_tokens = other_frames_tokens.shape[0]
-    
-    # 执行多次独立采样
-    similarities = []
-    
-    for repeat_idx in range(num_repeats):
-        # 从 Frame 0 中采样
-        num_sample_frame0 = min(max(10, int(num_frame0_tokens * sampling_percentage)), num_frame0_tokens, MAX_TOKEN_SAMPLE)
-        indices_frame0 = torch.randperm(num_frame0_tokens, device=frame0_tokens.device)[:num_sample_frame0]
-        sampled_frame0 = frame0_tokens[indices_frame0]  # [S0, D]
-        
-        # 从其他帧中采样
-        num_sample_other = min(max(10, int(num_other_tokens * sampling_percentage)), num_other_tokens, MAX_TOKEN_SAMPLE)
-        indices_other = torch.randperm(num_other_tokens, device=other_frames_tokens.device)[:num_sample_other]
-        sampled_other = other_frames_tokens[indices_other]  # [S_other, D]
-        
-        if debug and repeat_idx == 0:
-            print(f"  [DEBUG] Sampling {num_sample_frame0} tokens from Frame 0 out of {num_frame0_tokens}")
-            print(f"  [DEBUG] Sampling {num_sample_other} tokens from other frames out of {num_other_tokens}")
-        
-        # 计算配对相似度
-        # 方式1：对于每个 Frame 0 token，与所有 other tokens 配对（完整矩阵）
-        if ENABLE_PAIR_SAMPLING and (num_sample_frame0 * num_sample_other) > PAIRWISE_MATRIX_THRESHOLD:
-            # 配对采样：随机选择配对
-            K = min(PAIR_SAMPLES, num_sample_frame0 * num_sample_other * PAIR_SAMPLE_MULTIPLIER // 10)
-            
-            i = torch.randint(0, num_sample_frame0, (K,), device=frame0_tokens.device)
-            j = torch.randint(0, num_sample_other, (K,), device=other_frames_tokens.device)
-            
-            sims = (sampled_frame0[i] * sampled_other[j]).sum(dim=1)
-            avg_sim = sims.mean().item()
-            
-            if debug and repeat_idx == 0:
-                print(f"  [DEBUG] Pairwise sampling: K={K} pairs from {num_sample_frame0}×{num_sample_other} combinations")
-                print(f"  [DEBUG] Pairwise similarities: min={sims.min().item():.4f}, max={sims.max().item():.4f}, mean={avg_sim:.4f}")
-        else:
-            # 完整矩阵：Frame 0 tokens × other frames tokens
-            similarity_matrix = torch.matmul(sampled_frame0, sampled_other.T)  # [S0, S_other]
-            avg_sim = similarity_matrix.mean().item()
-            
-            if debug and repeat_idx == 0:
-                num_pairs = num_sample_frame0 * num_sample_other
-                print(f"  [DEBUG] Complete matrix: {num_sample_frame0}×{num_sample_other}={num_pairs} pairs")
-                print(f"  [DEBUG] Matrix similarities: min={similarity_matrix.min().item():.4f}, max={similarity_matrix.max().item():.4f}, mean={avg_sim:.4f}")
-        
-        similarities.append(avg_sim)
-    
-    # 所有重复的平均值
-    final_avg = np.mean(similarities)
-    
-    if debug:
-        print(f"  [DEBUG] Across {num_repeats} repeats: mean={final_avg:.4f}, std={np.std(similarities):.4f}")
+        print(f"  [DEBUG] Across {seq_len} frames: mean={final_avg:.4f}, std={np.std(frame_similarities):.4f}")
     
     return final_avg
 
 def generate_heatmap(data, block_layers, sequence_lengths, output_path):
-    """生成并保存 token 相似度热力图"""
+    """生成并保存 frame attention token 相似度热力图"""
     # 创建透视表用于热力图
     df = pd.DataFrame(data)
     pivot = df.pivot_table(index="sequence_length", columns="block_layer", values="token_similarity", aggfunc="mean")
@@ -415,20 +409,20 @@ def generate_heatmap(data, block_layers, sequence_lengths, output_path):
         annot=True,
         fmt=".4f",
         cmap="YlOrRd",
-        cbar_kws={"label": "平均 Token 相似度 (Frame 0 vs Others)"},
+        cbar_kws={"label": "平均 Token 相似度"},
         annot_kws={"fontsize": 10, "fontproperties": FONT_PROP},
         ax=ax,
     )
-    ax.set_xlabel("层级索引", fontsize=12, fontproperties=FONT_PROP)
+    ax.set_xlabel("帧注意力块索引", fontsize=12, fontproperties=FONT_PROP)
     ax.set_ylabel("序列长度", fontsize=12, fontproperties=FONT_PROP)
-    # ax.set_title("Token 相似度 vs 层级索引 vs 序列长度 (Frame 0 vs Others)", fontsize=14, fontproperties=FONT_PROP)
+    # ax.set_title("帧注意力 Token 相似度 vs 块索引 vs 序列长度", fontsize=14, fontproperties=FONT_PROP)
 
     # 应用中文字体到刻度与颜色条
     ax.set_xticklabels(ax.get_xticklabels(), fontproperties=FONT_PROP)
     ax.set_yticklabels(ax.get_yticklabels(), fontproperties=FONT_PROP)
     if ax.collections and ax.collections[0].colorbar is not None:
         cbar = ax.collections[0].colorbar
-        cbar.set_label("平均 Token 相似度 (Frame 0 vs Others)", fontproperties=FONT_PROP)
+        cbar.set_label("平均 Token 相似度", fontproperties=FONT_PROP)
     
     # 保存热力图
     plt.savefig(output_path, bbox_inches='tight', dpi=150)
@@ -478,11 +472,6 @@ def main(args):
     
     # --- Experiment Loop ---
     for seq_len in tqdm(sequence_lengths, desc="Testing"):
-        # 序列长度必须至少为 2（Frame 0 + 至少一个其他帧）
-        if seq_len < 2:
-            print(f"Skipping seq_len={seq_len}: must be at least 2 for Frame 0 vs Others comparison")
-            continue
-        
         # Load data
         try:
             if args.dataset_type == "7scenes":
@@ -511,8 +500,8 @@ def main(args):
             # Calculate token similarity for each block layer
             # FIX: Calculate multiple times per block and average to reduce variance
             for block_layer in block_layers:
-                # block_layer is already a global_block index (0-23)
-                block_name = f"global_block_{block_layer}"
+                # block_layer is a frame_block index (0-23)
+                block_name = f"frame_block_{block_layer}"
                 
                 if block_name in tokens and tokens[block_name] is not None:
                     # Calculate similarity 3 times per block and average
@@ -520,9 +509,9 @@ def main(args):
                     for calc_idx in range(3):
                         # Enable debug only on first calculation of first sequence length
                         debug_enabled = (seq_len == sequence_lengths[0] and block_layer == block_layers[0] and calc_idx == 0)
-                        similarity = calculate_token_similarity_frame0_vs_others(
+                        similarity = calculate_token_similarity(
                             tokens[block_name],
-                            seq_len,
+                            seq_len=seq_len,
                             sampling_percentage=args.token_sampling_percentage,
                             num_repeats=5,
                             debug=debug_enabled
@@ -558,12 +547,12 @@ def main(args):
     if results:
         # Save to CSV
         df = pd.DataFrame(results)
-        csv_path = os.path.join(args.output_dir, "token_similarity_frame0_vs_others_results.csv")
+        csv_path = os.path.join(args.output_dir, "token_similarity_frame_attention_results.csv")
         df.to_csv(csv_path, index=False)
         print(f"✓ Results saved to {csv_path}")
         
         # Generate and save heatmap
-        heatmap_path = os.path.join(args.output_dir, f"token_similarity_frame0_vs_others_{args.dataset_type}.png")
+        heatmap_path = os.path.join(args.output_dir, f"token_similarity_frame_attention_{args.dataset_type}.png")
         generate_heatmap(df, block_layers, sequence_lengths, heatmap_path)
         print(f"✓ Heatmap saved to {heatmap_path}")
         
@@ -571,8 +560,7 @@ def main(args):
         print(f"\n{'='*60}")
         print(f"Dataset: {args.dataset_type}")
         print(f"Sequence lengths: {sequence_lengths}")
-        print(f"Block layers: {block_layers}")
-        print(f"Comparison: Frame 0 vs Other Frames")
+        print(f"Block layers (Frame Attention): {block_layers}")
         print(f"{'='*60}")
         print(df.to_string(index=False))
     else:
