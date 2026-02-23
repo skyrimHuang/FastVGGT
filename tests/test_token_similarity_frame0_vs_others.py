@@ -80,7 +80,7 @@ PATH_FOR_SCANNET = "/home/hba/Documents/Dataset/ScanNet/scans"
 # --- Helper Functions ---
 
 def get_args_parser():
-    parser = argparse.ArgumentParser("Test Token Similarity vs Block Index vs Sequence Length", add_help=False)
+    parser = argparse.ArgumentParser("Test Token Similarity vs Block Index vs Sequence Length (Frame 0 vs Others)", add_help=False)
     # General arguments
     parser.add_argument("--ckpt_path", type=str, default="/home/hba/Documents/FastVGGT/ckpt/model_tracker_fixed_e20.pt", help="Path to the model checkpoint")
 
@@ -274,11 +274,17 @@ def setup_model_hooks(model, block_layers):
     
     return tokens, hooks
 
-def calculate_token_similarity(tokens, sampling_percentage=0.1, num_repeats=5, debug=False):
-    """计算 token 相似度（包含跨帧 token）。
+def calculate_token_similarity_frame0_vs_others(tokens, seq_len, sampling_percentage=0.1, num_repeats=5, debug=False):
+    """计算 Frame 0 token 与其他帧 token 之间的相似度。
+    
+    关键特征：
+    - Frame 0 的 token 与其他帧（Frame 1, 2, ..., T-1）的 token 配对
+    - 每个配对中，一个来自 Frame 0，另一个来自其他帧
+    - 计算所有这样的配对的平均余弦相似度
     
     Args:
-        tokens: 模型 hook 输出的 token 张量
+        tokens: 模型 hook 输出的 token 张量，形状 [B*T, H, W, D] 或 [B*T, N, D]
+        seq_len: 序列长度 (帧数)
         sampling_percentage: 采样百分比 (0.0-1.0)
         num_repeats: 独立采样运行次数（默认：5）
         debug: 是否打印调试信息
@@ -289,61 +295,92 @@ def calculate_token_similarity(tokens, sampling_percentage=0.1, num_repeats=5, d
     if tokens is None or tokens.numel() == 0:
         return 0.0
     
-    # 重新 reshape 为 (num_tokens, feature_dim)
+    # 获取 token 维度信息
     if len(tokens.shape) == 4:  # (B*T, H, W, C)
         B_times_T, H, W, C = tokens.shape
-        num_tokens = B_times_T * H * W
-        tokens_reshaped = tokens.view(-1, C)
+        tokens_per_frame = H * W
+        feature_dim = C
     elif len(tokens.shape) == 3:  # (B*T, N, C)
         B_times_T, N, C = tokens.shape
-        num_tokens = B_times_T * N
-        tokens_reshaped = tokens.view(-1, C)
+        tokens_per_frame = N
+        feature_dim = C
     else:
         return 0.0
     
-    if debug:
-        print(f"  [DEBUG] Token shape: {tokens.shape} -> reshaped: {tokens_reshaped.shape}")
-        print(f"  [DEBUG] Total tokens: {num_tokens}, Feature dim: {tokens_reshaped.shape[1]}")
-    
-    # 决定采样数量
-    num_sample_base = min(max(10, int(num_tokens * sampling_percentage)), num_tokens)
-    num_sample = min(num_sample_base, MAX_TOKEN_SAMPLE)
+    # 计算每个样本的帧数
+    num_samples = B_times_T // seq_len
     
     if debug:
-        print(f"  [DEBUG] Sampling {num_sample} tokens from {num_tokens} ({sampling_percentage*100:.1f}%)")
+        print(f"  [DEBUG] Token shape: {tokens.shape}")
+        print(f"  [DEBUG] Batch size: {num_samples}, Sequence length: {seq_len}, Tokens per frame: {tokens_per_frame}")
+        print(f"  [DEBUG] Feature dimension: {feature_dim}")
+    
+    # 将 tokens reshape 为 [B, T, tokens_per_frame, D]
+    if len(tokens.shape) == 4:
+        tokens_reshaped = tokens.view(num_samples, seq_len, H, W, C)
+        tokens_reshaped = tokens_reshaped.view(num_samples, seq_len, -1, C)  # [B, T, H*W, D]
+    else:  # len(tokens.shape) == 3
+        tokens_reshaped = tokens.view(num_samples, seq_len, N, C)  # [B, T, N, D]
+    
+    # 提取 Frame 0 的 token
+    frame0_tokens = tokens_reshaped[:, 0, :, :].reshape(-1, feature_dim)  # [B*H*W, D]
+    
+    # 提取其他帧的 token
+    other_frames_tokens = tokens_reshaped[:, 1:, :, :].reshape(-1, feature_dim)  # [B*(T-1)*H*W, D]
+    
+    if debug:
+        print(f"  [DEBUG] Frame 0 tokens shape: {frame0_tokens.shape}")
+        print(f"  [DEBUG] Other frames tokens shape: {other_frames_tokens.shape}")
+    
+    # 归一化
+    frame0_tokens = torch.nn.functional.normalize(frame0_tokens, dim=1)
+    other_frames_tokens = torch.nn.functional.normalize(other_frames_tokens, dim=1)
+    
+    num_frame0_tokens = frame0_tokens.shape[0]
+    num_other_tokens = other_frames_tokens.shape[0]
     
     # 执行多次独立采样
     similarities = []
     
     for repeat_idx in range(num_repeats):
-        # 随机采样 token
-        indices = torch.randperm(num_tokens, device=tokens_reshaped.device)[:num_sample]
-        sampled_tokens = tokens_reshaped[indices]
+        # 从 Frame 0 中采样
+        num_sample_frame0 = min(max(10, int(num_frame0_tokens * sampling_percentage)), num_frame0_tokens, MAX_TOKEN_SAMPLE)
+        indices_frame0 = torch.randperm(num_frame0_tokens, device=frame0_tokens.device)[:num_sample_frame0]
+        sampled_frame0 = frame0_tokens[indices_frame0]  # [S0, D]
         
-        # 归一化 token 用于余弦相似度
-        sampled_tokens = torch.nn.functional.normalize(sampled_tokens, dim=1)
+        # 从其他帧中采样
+        num_sample_other = min(max(10, int(num_other_tokens * sampling_percentage)), num_other_tokens, MAX_TOKEN_SAMPLE)
+        indices_other = torch.randperm(num_other_tokens, device=other_frames_tokens.device)[:num_sample_other]
+        sampled_other = other_frames_tokens[indices_other]  # [S_other, D]
         
-        if ENABLE_PAIR_SAMPLING and num_sample > PAIRWISE_MATRIX_THRESHOLD:
-            # 配对采样
-            K = min(PAIR_SAMPLES, num_sample * PAIR_SAMPLE_MULTIPLIER)
-            i = torch.randint(0, num_sample, (K,), device=sampled_tokens.device)
-            j = (i + torch.randint(1, num_sample, (K,), device=sampled_tokens.device)) % num_sample
-            sims = (sampled_tokens[i] * sampled_tokens[j]).sum(dim=1)
+        if debug and repeat_idx == 0:
+            print(f"  [DEBUG] Sampling {num_sample_frame0} tokens from Frame 0 out of {num_frame0_tokens}")
+            print(f"  [DEBUG] Sampling {num_sample_other} tokens from other frames out of {num_other_tokens}")
+        
+        # 计算配对相似度
+        # 方式1：对于每个 Frame 0 token，与所有 other tokens 配对（完整矩阵）
+        if ENABLE_PAIR_SAMPLING and (num_sample_frame0 * num_sample_other) > PAIRWISE_MATRIX_THRESHOLD:
+            # 配对采样：随机选择配对
+            K = min(PAIR_SAMPLES, num_sample_frame0 * num_sample_other * PAIR_SAMPLE_MULTIPLIER // 10)
+            
+            i = torch.randint(0, num_sample_frame0, (K,), device=frame0_tokens.device)
+            j = torch.randint(0, num_sample_other, (K,), device=other_frames_tokens.device)
+            
+            sims = (sampled_frame0[i] * sampled_other[j]).sum(dim=1)
             avg_sim = sims.mean().item()
             
             if debug and repeat_idx == 0:
-                print(f"  [DEBUG] Pairwise sampling: K={K} pairs")
+                print(f"  [DEBUG] Pairwise sampling: K={K} pairs from {num_sample_frame0}×{num_sample_other} combinations")
                 print(f"  [DEBUG] Pairwise similarities: min={sims.min().item():.4f}, max={sims.max().item():.4f}, mean={avg_sim:.4f}")
         else:
-            # 完整相似度矩阵
-            similarity_matrix = torch.matmul(sampled_tokens, sampled_tokens.T)
-            upper_tri = similarity_matrix.triu(diagonal=1)
-            num_pairs = num_sample * (num_sample - 1) // 2
-            avg_sim = upper_tri.sum().item() / num_pairs if num_pairs > 0 else 0.0
+            # 完整矩阵：Frame 0 tokens × other frames tokens
+            similarity_matrix = torch.matmul(sampled_frame0, sampled_other.T)  # [S0, S_other]
+            avg_sim = similarity_matrix.mean().item()
             
             if debug and repeat_idx == 0:
-                print(f"  [DEBUG] Complete matrix: {num_sample}x{num_sample}, {num_pairs} unique pairs")
-                print(f"  [DEBUG] Matrix similarities: min={upper_tri.min().item():.4f}, max={upper_tri.max().item():.4f}, mean={avg_sim:.4f}")
+                num_pairs = num_sample_frame0 * num_sample_other
+                print(f"  [DEBUG] Complete matrix: {num_sample_frame0}×{num_sample_other}={num_pairs} pairs")
+                print(f"  [DEBUG] Matrix similarities: min={similarity_matrix.min().item():.4f}, max={similarity_matrix.max().item():.4f}, mean={avg_sim:.4f}")
         
         similarities.append(avg_sim)
     
@@ -378,20 +415,20 @@ def generate_heatmap(data, block_layers, sequence_lengths, output_path):
         annot=True,
         fmt=".4f",
         cmap="YlOrRd",
-        cbar_kws={"label": "平均 Token 相似度"},
+        cbar_kws={"label": "平均 Token 相似度 (Frame 0 vs Others)"},
         annot_kws={"fontsize": 10, "fontproperties": FONT_PROP},
         ax=ax,
     )
     ax.set_xlabel("层级索引", fontsize=12, fontproperties=FONT_PROP)
     ax.set_ylabel("序列长度", fontsize=12, fontproperties=FONT_PROP)
-    # ax.set_title("Token 相似度 vs 层级索引 vs 序列长度", fontsize=14, fontproperties=FONT_PROP)
+    # ax.set_title("Token 相似度 vs 层级索引 vs 序列长度 (Frame 0 vs Others)", fontsize=14, fontproperties=FONT_PROP)
 
     # 应用中文字体到刻度与颜色条
     ax.set_xticklabels(ax.get_xticklabels(), fontproperties=FONT_PROP)
     ax.set_yticklabels(ax.get_yticklabels(), fontproperties=FONT_PROP)
     if ax.collections and ax.collections[0].colorbar is not None:
         cbar = ax.collections[0].colorbar
-        cbar.set_label("平均 Token 相似度", fontproperties=FONT_PROP)
+        cbar.set_label("平均 Token 相似度 (Frame 0 vs Others)", fontproperties=FONT_PROP)
     
     # 保存热力图
     plt.savefig(output_path, bbox_inches='tight', dpi=150)
@@ -441,6 +478,11 @@ def main(args):
     
     # --- Experiment Loop ---
     for seq_len in tqdm(sequence_lengths, desc="Testing"):
+        # 序列长度必须至少为 2（Frame 0 + 至少一个其他帧）
+        if seq_len < 2:
+            print(f"Skipping seq_len={seq_len}: must be at least 2 for Frame 0 vs Others comparison")
+            continue
+        
         # Load data
         try:
             if args.dataset_type == "7scenes":
@@ -478,8 +520,9 @@ def main(args):
                     for calc_idx in range(3):
                         # Enable debug only on first calculation of first sequence length
                         debug_enabled = (seq_len == sequence_lengths[0] and block_layer == block_layers[0] and calc_idx == 0)
-                        similarity = calculate_token_similarity(
-                            tokens[block_name], 
+                        similarity = calculate_token_similarity_frame0_vs_others(
+                            tokens[block_name],
+                            seq_len,
                             sampling_percentage=args.token_sampling_percentage,
                             num_repeats=5,
                             debug=debug_enabled
@@ -515,12 +558,12 @@ def main(args):
     if results:
         # Save to CSV
         df = pd.DataFrame(results)
-        csv_path = os.path.join(args.output_dir, "token_similarity_results.csv")
+        csv_path = os.path.join(args.output_dir, "token_similarity_frame0_vs_others_results.csv")
         df.to_csv(csv_path, index=False)
         print(f"✓ Results saved to {csv_path}")
         
         # Generate and save heatmap
-        heatmap_path = os.path.join(args.output_dir, f"token_similarity_heatmap_{args.dataset_type}.png")
+        heatmap_path = os.path.join(args.output_dir, f"token_similarity_frame0_vs_others_{args.dataset_type}.png")
         generate_heatmap(df, block_layers, sequence_lengths, heatmap_path)
         print(f"✓ Heatmap saved to {heatmap_path}")
         
@@ -529,6 +572,7 @@ def main(args):
         print(f"Dataset: {args.dataset_type}")
         print(f"Sequence lengths: {sequence_lengths}")
         print(f"Block layers: {block_layers}")
+        print(f"Comparison: Frame 0 vs Other Frames")
         print(f"{'='*60}")
         print(df.to_string(index=False))
     else:
