@@ -263,7 +263,8 @@ def load_images(
 # Global Configuration Variables
 # ============================================================================
 
-FRAME_COUNTS = [5, 10, 20, 50, 100]
+# FRAME_COUNTS = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 100]
+FRAME_COUNTS = list(range(5, 150, 5))
 MERGE_RATIOS = [0.0]
 NUM_RUNS = 3  # Number of averaging runs
 
