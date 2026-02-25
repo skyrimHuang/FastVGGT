@@ -101,7 +101,7 @@ def get_args_parser():
     parser.add_argument("--num_samples", type=int, default=1,
                        help="Number of samples per config")
     
-    parser.add_argument("--sequence_lengths", type=str, default="5,10,30,50,100", 
+    parser.add_argument("--sequence_lengths", type=str, default="120, 130", 
                        help="Comma-separated list of sequence lengths to test")
     
     parser.add_argument("--block_layers", type=str, default="0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23", 
