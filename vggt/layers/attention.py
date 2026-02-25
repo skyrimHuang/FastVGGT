@@ -164,49 +164,53 @@ class Attention(nn.Module):
                     plt.savefig(output_path)
                     plt.close()
 
-        if global_merging is not None and global_merging in merge_num:
+        # Token merging: only execute if conditions are met
+        merge_applied = False
+        if global_merging is not None and global_merging in merge_num and self.merge_ratio > 0:
             generator = torch.Generator(device=x.device)
             generator.manual_seed(33)
 
             r = int(x.shape[1] * self.merge_ratio)
 
-            m, u = token_merge_bipartite2d(
-                x,
-                self.patch_width,
-                self.patch_height,
-                2,
-                2,
-                r,
-                False,
-                generator,
-                enable_protection=True,
-            )
+            if r > 0:  # Only proceed if we have tokens to merge
+                m, u = token_merge_bipartite2d(
+                    x,
+                    self.patch_width,
+                    self.patch_height,
+                    2,
+                    2,
+                    r,
+                    False,
+                    generator,
+                    enable_protection=True,
+                )
 
-            m_a, u_a = (m, u)
+                m_a, u_a = (m, u)
 
-            B_q, H_q, N_q, D_q = q.shape
+                B_q, H_q, N_q, D_q = q.shape
 
-            q_merge_in = q.permute(0, 2, 1, 3).reshape(B_q, N_q, H_q * D_q)
-            k_merge_in = k.permute(0, 2, 1, 3).reshape(B_q, N_q, H_q * D_q)
-            v_merge_in = v.permute(0, 2, 1, 3).reshape(B_q, N_q, H_q * D_q)
+                q_merge_in = q.permute(0, 2, 1, 3).reshape(B_q, N_q, H_q * D_q)
+                k_merge_in = k.permute(0, 2, 1, 3).reshape(B_q, N_q, H_q * D_q)
+                v_merge_in = v.permute(0, 2, 1, 3).reshape(B_q, N_q, H_q * D_q)
 
-            q_out, k_out, v_out = m_a(
-                q_merge_in,
-                mode="mean",
-                extra_tensors=k_merge_in,
-                extra_tensors_2=v_merge_in,
-            )
+                q_out, k_out, v_out = m_a(
+                    q_merge_in,
+                    mode="mean",
+                    extra_tensors=k_merge_in,
+                    extra_tensors_2=v_merge_in,
+                )
 
-            del q_merge_in, k_merge_in, v_merge_in
+                del q_merge_in, k_merge_in, v_merge_in
 
-            N_m = q_out.shape[1]
-            q = q_out.reshape(B_q, N_m, H_q, D_q).permute(0, 2, 1, 3)
-            k = k_out.reshape(B_q, N_m, H_q, D_q).permute(0, 2, 1, 3)
-            v = v_out.reshape(B_q, N_m, H_q, D_q).permute(0, 2, 1, 3)
+                N_m = q_out.shape[1]
+                q = q_out.reshape(B_q, N_m, H_q, D_q).permute(0, 2, 1, 3)
+                k = k_out.reshape(B_q, N_m, H_q, D_q).permute(0, 2, 1, 3)
+                v = v_out.reshape(B_q, N_m, H_q, D_q).permute(0, 2, 1, 3)
 
-            del q_out, k_out, v_out
+                del q_out, k_out, v_out
 
-            N = N_m
+                N = N_m
+                merge_applied = True
 
         x = F.scaled_dot_product_attention(
             q,
@@ -219,7 +223,9 @@ class Attention(nn.Module):
         x = x.transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
-        if global_merging is not None and global_merging in merge_num:
+        
+        # Apply unmerge if merge was applied
+        if merge_applied:
             x = u_a(x)
         return x
 

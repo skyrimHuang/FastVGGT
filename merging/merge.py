@@ -30,6 +30,7 @@ def fast_similarity_chunks(
 
 def do_nothing(
     x: torch.Tensor,
+    mode: str = "mean",  # Unused, but required for API compatibility with merge()
     extra_tensors=None,
     extra_tensors_2=None,
 ) -> Union[
@@ -37,6 +38,19 @@ def do_nothing(
     Tuple[torch.Tensor, torch.Tensor],
     Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
 ]:
+    """
+    No-op function that returns tensors unchanged.
+    Used when r=0 (no tokens to merge).
+    
+    Args:
+        x: Input tensor
+        mode: Merge mode (unused, for API compatibility)
+        extra_tensors: Optional additional tensor to pass through
+        extra_tensors_2: Optional second additional tensor to pass through
+    
+    Returns:
+        Input tensor(s) unchanged
+    """
     if extra_tensors is not None and extra_tensors_2 is not None:
         return x, extra_tensors, extra_tensors_2
     elif extra_tensors is not None:
