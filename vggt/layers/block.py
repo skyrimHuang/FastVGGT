@@ -42,6 +42,8 @@ class Block(nn.Module):
         rope=None,
         merging=0,
         merge_ratio=0.9,
+        use_norm_guided=False,
+        merge_threshold=0.85,
     ) -> None:
         super().__init__()
 
@@ -58,6 +60,8 @@ class Block(nn.Module):
             fused_attn=fused_attn,
             rope=rope,
             merge_ratio=merge_ratio,
+            use_norm_guided=use_norm_guided,
+            merge_threshold=merge_threshold,
         )
 
         self.ls1 = (
