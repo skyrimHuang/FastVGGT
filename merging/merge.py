@@ -137,16 +137,16 @@ def token_merge_bipartite2d(
 
             # Process other images - fully vectorized batch operations
             if num_imgs > 1:
-            cls_indices = (
-                torch.arange(1, num_imgs, device=metric.device) * tokens_per_img
-            )
-            cls_indices = cls_indices[:, None] + torch.arange(5, device=metric.device)
-            idx_buffer_seq[cls_indices.flatten()] = -1
-            effective_h = min(hsy * sy, h)
-            effective_w = min(wsx * sx, w)
-            effective_grid_size = effective_h * effective_w
+                cls_indices = (
+                    torch.arange(1, num_imgs, device=metric.device) * tokens_per_img
+                )
+                cls_indices = cls_indices[:, None] + torch.arange(5, device=metric.device)
+                idx_buffer_seq[cls_indices.flatten()] = -1
+                effective_h = min(hsy * sy, h)
+                effective_w = min(wsx * sx, w)
+                effective_grid_size = effective_h * effective_w
 
-            if no_rand:
+                if no_rand:
                 base_pattern = torch.zeros(
                     effective_grid_size, device=metric.device, dtype=torch.int64
                 )
