@@ -92,28 +92,46 @@ def token_merge_bipartite2d(
     with torch.no_grad():
         # ============ Norm-Guided Anchoring (方案一) ============
         if use_norm_guided and enable_protection:
-            # Compute L2 norm for each token (before normalization for cosine similarity)
-            token_norms = metric.norm(dim=-1)  # [B, N]
-            # Average across batch dimension for consistent ordering
-            avg_norms = token_norms.mean(dim=0)  # [N]
-            
-            # Sort by norm descending (high norm = high importance)
-            sorted_indices = torch.argsort(avg_norms, descending=True)
-            
-            # Three-tier partitioning (10% protected, 40% dst anchors, 50% src)
-            num_protected = int(N * 0.10)
-            num_dst = int(N * 0.40)
-            # num_src = N - num_protected - num_dst (~50%)
-            
-            protected_indices = sorted_indices[:num_protected]
-            dst_indices = sorted_indices[num_protected:num_protected + num_dst]
-            src_indices = sorted_indices[num_protected + num_dst:]
-            
-            # Build idx_buffer_seq: -1 for dst, 0+ for src
+            # Initialize idx_buffer
             idx_buffer_seq = torch.zeros(N, device=metric.device, dtype=torch.int64)
-            idx_buffer_seq[dst_indices] = -1
-            # Assign sequential indices to src tokens
-            idx_buffer_seq[src_indices] = torch.arange(len(src_indices), device=metric.device)
+            
+            # 🔧 FIX: Preserve first frame as all-dst (critical for multi-view geometry)
+            if num_imgs > 0:
+                idx_buffer_seq[:tokens_per_img] = -1  # First frame all tokens as dst
+            
+            # Apply norm-guided only to remaining frames (if any)
+            if num_imgs > 1:
+                # Work with remaining frames only
+                remaining_start = tokens_per_img
+                remaining_tokens = metric[:, remaining_start:, :]  # [B, N_remaining, C]
+                N_remaining = N - tokens_per_img
+                
+                # Compute L2 norm for remaining tokens (before normalization for cosine similarity)
+                token_norms = remaining_tokens.norm(dim=-1)  # [B, N_remaining]
+                avg_norms = token_norms.mean(dim=0)  # [N_remaining]
+                
+                # Sort by norm descending (high norm = high importance)
+                sorted_indices_local = torch.argsort(avg_norms, descending=True)
+                
+                # Three-tier partitioning on remaining tokens (10% protected, 40% dst, 50% src)
+                num_protected = int(N_remaining * 0.10)
+                num_dst = int(N_remaining * 0.40)
+                
+                protected_indices_local = sorted_indices_local[:num_protected]
+                dst_indices_local = sorted_indices_local[num_protected:num_protected + num_dst]
+                src_indices_local = sorted_indices_local[num_protected + num_dst:]
+                
+                # Convert to global indices
+                protected_indices = protected_indices_local + remaining_start
+                dst_indices_global = dst_indices_local + remaining_start
+                src_indices_global = src_indices_local + remaining_start
+                
+                # Update idx_buffer for remaining frames
+                idx_buffer_seq[dst_indices_global] = -1
+                idx_buffer_seq[src_indices_global] = torch.arange(len(src_indices_global), device=metric.device)
+            else:
+                # Only one frame, all tokens protected as dst
+                protected_indices = torch.arange(N, device=metric.device)
             
         # ============ Original Grid-Based Split (fallback) ============
         elif enable_protection:
