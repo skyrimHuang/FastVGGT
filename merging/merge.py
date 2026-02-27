@@ -147,61 +147,61 @@ def token_merge_bipartite2d(
                 effective_grid_size = effective_h * effective_w
 
                 if no_rand:
-                base_pattern = torch.zeros(
-                    effective_grid_size, device=metric.device, dtype=torch.int64
-                )
-                grid_starts = (
-                    torch.arange(1, num_imgs, device=metric.device) * tokens_per_img + 5
-                )
-                grid_indices = grid_starts[:, None] + torch.arange(
-                    effective_grid_size, device=metric.device
-                )
-                idx_buffer_seq[grid_indices.flatten()] = base_pattern.repeat(
-                    num_imgs - 1
-                )
-            else:
-                total_other_imgs = num_imgs - 1
-                all_rand_idx = torch.randint(
-                    sy * sx,
-                    size=(total_other_imgs, hsy, wsx),
-                    device=metric.device,
-                    generator=generator,
-                )
-
-                scatter_src = -torch.ones(
-                    total_other_imgs, hsy, wsx, device=metric.device, dtype=torch.int64
-                )
-
-                idx_buffer_batch = torch.zeros(
-                    total_other_imgs,
-                    hsy,
-                    wsx,
-                    sy * sx,
-                    device=metric.device,
-                    dtype=torch.int64,
-                )
-                idx_buffer_batch.scatter_(
-                    dim=3,
-                    index=all_rand_idx.unsqueeze(-1),
-                    src=scatter_src.unsqueeze(-1),
-                )
-
-                idx_buffer_batch = (
-                    idx_buffer_batch.view(total_other_imgs, hsy, wsx, sy, sx)
-                    .transpose(2, 3)
-                    .reshape(total_other_imgs, hsy * sy, wsx * sx)
-                )
-
-                # Batch fill to target positions - still needs a small loop here, but operations are greatly reduced
-                for i in range(total_other_imgs):
-                    img_idx = i + 1
-                    grid_start = img_idx * tokens_per_img + 5
-                    flat_view = idx_buffer_batch[
-                        i, :effective_h, :effective_w
-                    ].flatten()
-                    idx_buffer_seq[grid_start : grid_start + effective_grid_size] = (
-                        flat_view
+                    base_pattern = torch.zeros(
+                        effective_grid_size, device=metric.device, dtype=torch.int64
                     )
+                    grid_starts = (
+                        torch.arange(1, num_imgs, device=metric.device) * tokens_per_img + 5
+                    )
+                    grid_indices = grid_starts[:, None] + torch.arange(
+                        effective_grid_size, device=metric.device
+                    )
+                    idx_buffer_seq[grid_indices.flatten()] = base_pattern.repeat(
+                        num_imgs - 1
+                    )
+                else:
+                    total_other_imgs = num_imgs - 1
+                    all_rand_idx = torch.randint(
+                        sy * sx,
+                        size=(total_other_imgs, hsy, wsx),
+                        device=metric.device,
+                        generator=generator,
+                    )
+
+                    scatter_src = -torch.ones(
+                        total_other_imgs, hsy, wsx, device=metric.device, dtype=torch.int64
+                    )
+
+                    idx_buffer_batch = torch.zeros(
+                        total_other_imgs,
+                        hsy,
+                        wsx,
+                        sy * sx,
+                        device=metric.device,
+                        dtype=torch.int64,
+                    )
+                    idx_buffer_batch.scatter_(
+                        dim=3,
+                        index=all_rand_idx.unsqueeze(-1),
+                        src=scatter_src.unsqueeze(-1),
+                    )
+
+                    idx_buffer_batch = (
+                        idx_buffer_batch.view(total_other_imgs, hsy, wsx, sy, sx)
+                        .transpose(2, 3)
+                        .reshape(total_other_imgs, hsy * sy, wsx * sx)
+                    )
+
+                    # Batch fill to target positions - still needs a small loop here, but operations are greatly reduced
+                    for i in range(total_other_imgs):
+                        img_idx = i + 1
+                        grid_start = img_idx * tokens_per_img + 5
+                        flat_view = idx_buffer_batch[
+                            i, :effective_h, :effective_w
+                        ].flatten()
+                        idx_buffer_seq[grid_start : grid_start + effective_grid_size] = (
+                            flat_view
+                        )
 
         rand_idx = idx_buffer_seq.reshape(1, -1, 1).argsort(dim=1)
         num_dst_orig = int((idx_buffer_seq == -1).sum())
