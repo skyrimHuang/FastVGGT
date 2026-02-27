@@ -56,12 +56,15 @@ def token_merge_bipartite2d(
     generator: Optional[torch.Generator] = None,
     enable_protection: bool = False,
     use_norm_guided: bool = False,
-    merge_threshold: float = 0.85,
 ) -> Tuple[Callable, Callable]:
     """
     Divide tokens into source (src) and destination (dst) groups, and merge r tokens from src to dst.
-    dst tokens are selected by grid regions (default) or L2 norm-based ranking (if use_norm_guided=True).
-    Optionally protect high-importance tokens and apply similarity threshold for adaptive merging.
+    
+    Strategies:
+    1. Grid-based split (default): Divide tokens spatially into grid blocks
+    2. Norm-Guided Anchoring: Use L2 norm to protect high-importance tokens
+    
+    Merging uses Top-K strategy: Select top r pairs with highest cosine similarity.
 
     Args:
      - metric [B, N, C]: Tensor for similarity computation, B=batch size, N=token count, C=feature dimension
@@ -69,12 +72,11 @@ def token_merge_bipartite2d(
      - h: Image height in tokens
      - sx: dst stride in x dimension, must divide w evenly
      - sy: dst stride in y dimension, must divide h evenly
-     - r: Number of tokens to remove through merging
+     - r: Number of tokens to remove through merging (Top-K parameter)
      - no_rand: If True, disable randomness (use only top-left token)
      - generator: Random number generator if no_rand is False and not None
-     - enable_protection: If True, enable importance protection feature
-     - use_norm_guided: If True, use L2 norm-based split instead of grid-based (Norm-Guided Anchoring)
-     - merge_threshold: Similarity threshold for adaptive merge gating (Threshold-Gated Anti-Collapse)
+     - enable_protection: If True, enable importance protection (protect high-norm tokens)
+     - use_norm_guided: If True, use L2 norm-based split instead of grid-based
 
     Returns:
      - (merge, unmerge): Two functions for merging tokens and restoring pre-merge state
@@ -273,18 +275,8 @@ def token_merge_bipartite2d(
         b_transposed = b.transpose(-1, -2)
         node_max, node_idx = fast_similarity_chunks(a, b_transposed, chunk_size)
         
-        # ============ Threshold-Gated Anti-Collapse (方案二) ============
-        # Filter out low-similarity matches to prevent forced merging of dissimilar tokens
-        if merge_threshold > 0:
-            valid_similarity = node_max > merge_threshold  # [B, num_src_actual]
-            # Count valid matches per batch
-            valid_count_per_batch = valid_similarity.sum(dim=-1)  # [B]
-            # Use minimum to ensure all batches have valid data
-            valid_count = valid_count_per_batch.min().item()
-        else:
-            valid_similarity = torch.ones_like(node_max, dtype=torch.bool)
-            valid_count = num_src_actual
-        
+        # ============ Top-K Selection ============
+        # Select top r pairs with highest cosine similarity
         edge_idx = node_max.argsort(dim=-1, descending=True)[..., None]
 
         # If protection is enabled, filter out protected tokens to ensure they are not merged
@@ -293,13 +285,8 @@ def token_merge_bipartite2d(
             protected_mask_src = torch.isin(src_indices, protected_indices)
             edge_flat = edge_idx[0, :, 0]
             
-            # Combine protection mask with similarity threshold mask
-            if merge_threshold > 0:
-                similarity_mask = valid_similarity[0]  # [num_src_actual]
-                combined_valid_mask = (~protected_mask_src[edge_flat]) & similarity_mask[edge_flat]
-            else:
-                combined_valid_mask = ~protected_mask_src[edge_flat]
-            
+            # Filter protected tokens
+            combined_valid_mask = ~protected_mask_src[edge_flat]
             valid_edges = edge_flat[combined_valid_mask]
 
             valid_count_protected = valid_edges.shape[0]
@@ -308,19 +295,10 @@ def token_merge_bipartite2d(
             unm_idx = valid_edges[r_actual:].unsqueeze(0).unsqueeze(-1)
             src_idx = valid_edges[:r_actual].unsqueeze(0).unsqueeze(-1)
         else:
-            # Apply only similarity threshold without protection
-            if merge_threshold > 0:
-                edge_flat = edge_idx[0, :, 0]
-                similarity_mask = valid_similarity[0]
-                valid_edges = edge_flat[similarity_mask[edge_flat]]
-                valid_count_threshold = valid_edges.shape[0]
-                r_actual = min(r, valid_count_threshold)
-                unm_idx = valid_edges[r_actual:].unsqueeze(0).unsqueeze(-1)
-                src_idx = valid_edges[:r_actual].unsqueeze(0).unsqueeze(-1)
-            else:
-                unm_idx = edge_idx[..., r:, :]
-                src_idx = edge_idx[..., :r, :]
-                r_actual = r
+            # Simple Top-K: select top r pairs
+            unm_idx = edge_idx[..., r:, :]
+            src_idx = edge_idx[..., :r, :]
+            r_actual = r
 
         # Get dst token indices corresponding to each src token to be merged
         dst_idx = gather(node_idx[..., None], dim=-2, index=src_idx)

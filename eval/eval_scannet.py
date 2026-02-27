@@ -82,13 +82,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--use_norm_guided",
         action="store_true",
-        help="Use L2 norm-guided anchoring instead of grid-based split (Improvement 1)",
-    )
-    parser.add_argument(
-        "--merge_threshold",
-        type=float,
-        default=0.85,
-        help="Similarity threshold for adaptive merge gating (Improvement 2, range: 0.0-1.0)",
+        help="Use L2 norm-guided anchoring instead of grid-based split",
     )
     args = parser.parse_args()
     torch.manual_seed(33)
@@ -112,7 +106,6 @@ if __name__ == "__main__":
         merge_ratio=args.merge_ratio,
         vis_attn_map=args.vis_attn_map,
         use_norm_guided=args.use_norm_guided,
-        merge_threshold=args.merge_threshold,
     )
     ckpt = torch.load(args.ckpt_path, map_location="cpu")
     incompat = model.load_state_dict(ckpt, strict=False)
