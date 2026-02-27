@@ -55,11 +55,13 @@ def token_merge_bipartite2d(
     no_rand: bool = False,
     generator: Optional[torch.Generator] = None,
     enable_protection: bool = False,
+    use_norm_guided: bool = False,
+    merge_threshold: float = 0.85,
 ) -> Tuple[Callable, Callable]:
     """
     Divide tokens into source (src) and destination (dst) groups, and merge r tokens from src to dst.
-    dst tokens are selected by randomly choosing one token from each (sx, sy) region.
-    Optionally protect the top 10% of tokens from merging based on importance scores.
+    dst tokens are selected by grid regions (default) or L2 norm-based ranking (if use_norm_guided=True).
+    Optionally protect high-importance tokens and apply similarity threshold for adaptive merging.
 
     Args:
      - metric [B, N, C]: Tensor for similarity computation, B=batch size, N=token count, C=feature dimension
@@ -71,6 +73,8 @@ def token_merge_bipartite2d(
      - no_rand: If True, disable randomness (use only top-left token)
      - generator: Random number generator if no_rand is False and not None
      - enable_protection: If True, enable importance protection feature
+     - use_norm_guided: If True, use L2 norm-based split instead of grid-based (Norm-Guided Anchoring)
+     - merge_threshold: Similarity threshold for adaptive merge gating (Threshold-Gated Anti-Collapse)
 
     Returns:
      - (merge, unmerge): Two functions for merging tokens and restoring pre-merge state
@@ -86,27 +90,53 @@ def token_merge_bipartite2d(
     assert tokens_per_img * num_imgs == N, "Token count doesn't match (w*h+5)*num_imgs"
 
     with torch.no_grad():
-        # Determine whether to compute importance scores based on enable_protection
-        if enable_protection:
+        # ============ Norm-Guided Anchoring (方案一) ============
+        if use_norm_guided and enable_protection:
+            # Compute L2 norm for each token (before normalization for cosine similarity)
+            token_norms = metric.norm(dim=-1)  # [B, N]
+            # Average across batch dimension for consistent ordering
+            avg_norms = token_norms.mean(dim=0)  # [N]
+            
+            # Sort by norm descending (high norm = high importance)
+            sorted_indices = torch.argsort(avg_norms, descending=True)
+            
+            # Three-tier partitioning (10% protected, 40% dst anchors, 50% src)
+            num_protected = int(N * 0.10)
+            num_dst = int(N * 0.40)
+            # num_src = N - num_protected - num_dst (~50%)
+            
+            protected_indices = sorted_indices[:num_protected]
+            dst_indices = sorted_indices[num_protected:num_protected + num_dst]
+            src_indices = sorted_indices[num_protected + num_dst:]
+            
+            # Build idx_buffer_seq: -1 for dst, 0+ for src
+            idx_buffer_seq = torch.zeros(N, device=metric.device, dtype=torch.int64)
+            idx_buffer_seq[dst_indices] = -1
+            # Assign sequential indices to src tokens
+            idx_buffer_seq[src_indices] = torch.arange(len(src_indices), device=metric.device)
+            
+        # ============ Original Grid-Based Split (fallback) ============
+        elif enable_protection:
             num_protected = int(N * 0.1)
             step = max(1, N // num_protected)
             protected_indices = torch.arange(0, N, step, device=metric.device)[
                 :num_protected
             ]
+            idx_buffer_seq = torch.zeros(N, device=metric.device, dtype=torch.int64)
         else:
             protected_indices = None
             num_protected = 0
-
-        # Global idx_buffer_seq of length N; -1 indicates dst, 0 indicates src (maintain original logic)
-        idx_buffer_seq = torch.zeros(N, device=metric.device, dtype=torch.int64)
+            idx_buffer_seq = torch.zeros(N, device=metric.device, dtype=torch.int64)
         hsy, wsx = h // sy, w // sx  # Number of blocks within each image
 
-        # Mark first image entirely as dst
-        if num_imgs > 0:
-            idx_buffer_seq[:tokens_per_img] = -1
+        # Skip grid-based split if using norm-guided (already done above)
+        if not use_norm_guided:
+            # Mark first image entirely as dst
+            if num_imgs > 0:
+                idx_buffer_seq[:tokens_per_img] = -1
 
-        # Process other images - fully vectorized batch operations
-        if num_imgs > 1:
+            # Process other images - fully vectorized batch operations
+            if num_imgs > 1:
             cls_indices = (
                 torch.arange(1, num_imgs, device=metric.device) * tokens_per_img
             )
@@ -224,6 +254,19 @@ def token_merge_bipartite2d(
 
         b_transposed = b.transpose(-1, -2)
         node_max, node_idx = fast_similarity_chunks(a, b_transposed, chunk_size)
+        
+        # ============ Threshold-Gated Anti-Collapse (方案二) ============
+        # Filter out low-similarity matches to prevent forced merging of dissimilar tokens
+        if merge_threshold > 0:
+            valid_similarity = node_max > merge_threshold  # [B, num_src_actual]
+            # Count valid matches per batch
+            valid_count_per_batch = valid_similarity.sum(dim=-1)  # [B]
+            # Use minimum to ensure all batches have valid data
+            valid_count = valid_count_per_batch.min().item()
+        else:
+            valid_similarity = torch.ones_like(node_max, dtype=torch.bool)
+            valid_count = num_src_actual
+        
         edge_idx = node_max.argsort(dim=-1, descending=True)[..., None]
 
         # If protection is enabled, filter out protected tokens to ensure they are not merged
@@ -231,18 +274,35 @@ def token_merge_bipartite2d(
             src_indices = a_idx[0, :, 0]
             protected_mask_src = torch.isin(src_indices, protected_indices)
             edge_flat = edge_idx[0, :, 0]
-            valid_mask = ~protected_mask_src[edge_flat]
-            valid_edges = edge_flat[valid_mask]
+            
+            # Combine protection mask with similarity threshold mask
+            if merge_threshold > 0:
+                similarity_mask = valid_similarity[0]  # [num_src_actual]
+                combined_valid_mask = (~protected_mask_src[edge_flat]) & similarity_mask[edge_flat]
+            else:
+                combined_valid_mask = ~protected_mask_src[edge_flat]
+            
+            valid_edges = edge_flat[combined_valid_mask]
 
-            valid_count = valid_edges.shape[0]
-            r_actual = min(r, valid_count)
+            valid_count_protected = valid_edges.shape[0]
+            r_actual = min(r, valid_count_protected)
 
             unm_idx = valid_edges[r_actual:].unsqueeze(0).unsqueeze(-1)
             src_idx = valid_edges[:r_actual].unsqueeze(0).unsqueeze(-1)
         else:
-            unm_idx = edge_idx[..., r:, :]
-            src_idx = edge_idx[..., :r, :]
-            r_actual = r
+            # Apply only similarity threshold without protection
+            if merge_threshold > 0:
+                edge_flat = edge_idx[0, :, 0]
+                similarity_mask = valid_similarity[0]
+                valid_edges = edge_flat[similarity_mask[edge_flat]]
+                valid_count_threshold = valid_edges.shape[0]
+                r_actual = min(r, valid_count_threshold)
+                unm_idx = valid_edges[r_actual:].unsqueeze(0).unsqueeze(-1)
+                src_idx = valid_edges[:r_actual].unsqueeze(0).unsqueeze(-1)
+            else:
+                unm_idx = edge_idx[..., r:, :]
+                src_idx = edge_idx[..., :r, :]
+                r_actual = r
 
         # Get dst token indices corresponding to each src token to be merged
         dst_idx = gather(node_idx[..., None], dim=-2, index=src_idx)
