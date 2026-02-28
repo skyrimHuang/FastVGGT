@@ -28,6 +28,13 @@ from vggt.utils.eval_utils import (
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        "--dataset",
+        type=str,
+        default="scannet",
+        choices=["scannet", "kitti"],
+        help="Dataset to evaluate (scannet or kitti)"
+    )
+    parser.add_argument(
         "--data_dir", type=Path, default="/home/hba/Documents/Dataset/ScanNet/scans"
     )
     parser.add_argument(
@@ -79,18 +86,46 @@ if __name__ == "__main__":
         default=0.9,
         help="Token merge ratio (0.0-1.0)",
     )
+    parser.add_argument(
+        "--scale_head_ckpt",
+        type=str,
+        default=None,
+        help="Path to trained scale head checkpoint (for KITTI stereo mode)"
+    )
+    parser.add_argument(
+        "--kitti_num_samples",
+        type=int,
+        default=10,
+        help="Number of KITTI samples to evaluate"
+    )
     args = parser.parse_args()
     torch.manual_seed(33)
 
-    # Scene sampling
-    if args.num_scenes is not None:
-        scannet_scenes = get_all_scenes(args.data_dir, args.num_scenes)
-        print(f"Evaluate {len(scannet_scenes)} scenes")
+    # Dataset specific setup
+    if args.dataset == "kitti":
+        from eval.dataset_utils.kitti_stereo import KITTIStereoDataset
+        
+        print(f"📊 Evaluating KITTI Stereo Dataset")
+        print(f"🔧 Data directory: {args.data_dir}")
+        
+        kitti_dataset = KITTIStereoDataset(
+            data_dir=str(args.data_dir),
+            indices=list(range(min(args.kitti_num_samples, 200)))
+        )
+        print(f"Loaded {len(kitti_dataset)} KITTI samples")
     else:
-        yaml_path = Path(__file__).parent / "scannet_50.yaml"
-        with open(yaml_path, "r") as f:
-            scannet_scenes = [line.strip() for line in f if line.strip()]
-        print(f"Evaluate {len(scannet_scenes)} scenes from {yaml_path}")
+        # ScanNet setup (original)
+        print(f"📊 Evaluating ScanNet Dataset")
+        
+        # Scene sampling
+        if args.num_scenes is not None:
+            scannet_scenes = get_all_scenes(args.data_dir, args.num_scenes)
+            print(f"Evaluate {len(scannet_scenes)} scenes")
+        else:
+            yaml_path = Path(__file__).parent / "scannet_50.yaml"
+            with open(yaml_path, "r") as f:
+                scannet_scenes = [line.strip() for line in f if line.strip()]
+            print(f"Evaluate {len(scannet_scenes)} scenes from {yaml_path}")
 
     all_scenes_metrics = {"scenes": {}, "average": {}}
     # Force use of bf16 data type
@@ -100,126 +135,183 @@ if __name__ == "__main__":
         merging=args.merging,
         merge_ratio=args.merge_ratio,
         vis_attn_map=args.vis_attn_map,
+        enable_scale_head=(args.dataset == "kitti" and args.scale_head_ckpt is not None),
     )
     ckpt = torch.load(args.ckpt_path, map_location="cpu")
     incompat = model.load_state_dict(ckpt, strict=False)
     model = model.cuda().eval()
     model = model.to(torch.float16)
+    
+    # Load trained scale head if provided
+    if args.dataset == "kitti" and args.scale_head_ckpt is not None and model.scale_head is not None:
+        print(f"Loading trained scale head from: {args.scale_head_ckpt}")
+        scale_head_state = torch.load(args.scale_head_ckpt, map_location='cuda')
+        model.scale_head.load_state_dict(scale_head_state)
+        print("✓ Scale head loaded successfully")
 
-    # Process each scene
-    for scene in scannet_scenes[:2]:
-        scene_dir = args.data_dir / f"{scene}"
-        output_scene_dir = args.output_path / f"input_frame_{args.input_frame}" / scene
-        if (output_scene_dir / "metrics.json").exists():
-            continue
-
-        # Load scene data
-        images_dir = scene_dir / "color"
-        pose_path = scene_dir / "pose"
-        image_paths = get_sorted_image_paths(images_dir)
-        poses_gt, first_gt_pose, available_pose_frame_ids = load_poses(pose_path)
-        if (
-            poses_gt is None
-            or first_gt_pose is None
-            or available_pose_frame_ids is None
-        ):
-            print(f"Skipping scene {scene}: no pose data")
-            continue
-
-        # Frame filtering
-        selected_frame_ids, selected_image_paths, selected_pose_indices = (
-            build_frame_selection(
-                image_paths, available_pose_frame_ids, args.input_frame
+    # ==================== KITTI Evaluation ====================
+    if args.dataset == "kitti":
+        print("\n" + "="*60)
+        print("KITTI STEREO EVALUATION")
+        print("="*60 + "\n")
+        
+        for idx in range(len(kitti_dataset)):
+            sample = kitti_dataset[idx]
+            img_id = sample['metadata']['img_id_str']
+            
+            images = sample['images'].unsqueeze(0).cuda()  # [1, 2, 3, 518, 392]
+            calib = sample['calibration']
+            gt_scale = sample['gt_scale'].item()
+            
+            # Prepare calibration features for scale head
+            calib_features = torch.tensor(
+                [[calib['baseline'], calib['K_scaled'][0, 0]]],
+                dtype=torch.float32,
+                device='cuda'
             )
-        )
-
-        # Get corresponding poses
-        c2ws = poses_gt[selected_pose_indices]
-        image_paths = selected_image_paths
-
-        if len(image_paths) == 0:
-            print(f"No images found in {images_dir}")
-            continue
-
-        print("🚩Processing", scene, f"Found {len(image_paths)} images")
-        all_cam_to_world_mat = []
-        all_world_points = []
-
-        try:
-            # Load images
-            images = load_images_rgb(image_paths)
-
-            if not images or len(images) < 3:
-                print(f"Skipping {scene}: insufficient valid images")
+            
+            try:
+                with torch.no_grad():
+                    # Forward pass
+                    predictions = model(images, calibration_batch=calib_features)
+                    
+                    # Extract results
+                    depth = predictions['depth'].cpu().numpy()  # [1, 2, H, W, 1]
+                    
+                    if 'scale_factor' in predictions:
+                        pred_scale = predictions['scale_factor'][0].item()
+                        scale_error = abs(pred_scale - gt_scale) / gt_scale * 100
+                        
+                        print(f"Sample {img_id}:")
+                        print(f"  GT scale:   {gt_scale:.6f}")
+                        print(f"  Pred scale: {pred_scale:.6f}")
+                        print(f"  Error:      {scale_error:.2f}%")
+                    else:
+                        print(f"Sample {img_id}: scale_factor not in predictions")
+                    
+                    print()
+                    
+            except Exception as e:
+                print(f"✗ Error processing sample {img_id}: {e}")
+                import traceback
+                traceback.print_exc()
+    
+    # ==================== ScanNet Evaluation ====================
+    else:
+        # Process each scene
+        for scene in scannet_scenes[:2]:
+            scene_dir = args.data_dir / f"{scene}"
+            output_scene_dir = args.output_path / f"input_frame_{args.input_frame}" / scene
+            if (output_scene_dir / "metrics.json").exists():
                 continue
 
-            frame_ids = selected_frame_ids
-            images_array = np.stack(images)
-            vgg_input, patch_width, patch_height = get_vgg_input_imgs(images_array)
-            print(f"Patch dimensions: {patch_width}x{patch_height}")
+            # Load scene data
+            images_dir = scene_dir / "color"
+            pose_path = scene_dir / "pose"
+            image_paths = get_sorted_image_paths(images_dir)
+            poses_gt, first_gt_pose, available_pose_frame_ids = load_poses(pose_path)
+            if (
+                poses_gt is None
+                or first_gt_pose is None
+                or available_pose_frame_ids is None
+            ):
+                print(f"Skipping scene {scene}: no pose data")
+                continue
 
-            # Update model attention layers with dynamic patch dimensions
-            model.update_patch_dimensions(patch_width, patch_height)
-
-            # Inference + Reconstruction
-            (
-                extrinsic_np,
-                intrinsic_np,
-                all_world_points,
-                all_point_colors,
-                all_cam_to_world_mat,
-                inference_time_ms,
-            ) = infer_vggt_and_reconstruct(
-                model, vgg_input, dtype, args.depth_conf_thresh, image_paths
-            )
-            print(f"Inference time: {inference_time_ms:.2f}ms")
-
-            # Process results
-            if not all_cam_to_world_mat or not all_world_points:
-                print(
-                    f"Skipping {scene}: failed to obtain valid camera poses or point clouds"
+            # Frame filtering
+            selected_frame_ids, selected_image_paths, selected_pose_indices = (
+                build_frame_selection(
+                    image_paths, available_pose_frame_ids, args.input_frame
                 )
+            )
+
+            # Get corresponding poses
+            c2ws = poses_gt[selected_pose_indices]
+            image_paths = selected_image_paths
+
+            if len(image_paths) == 0:
+                print(f"No images found in {images_dir}")
                 continue
 
-            # Evaluate and save
-            metrics = evaluate_scene_and_save(
-                scene,
-                c2ws,
-                first_gt_pose,
-                frame_ids,
-                all_cam_to_world_mat,
-                all_world_points,
-                output_scene_dir,
-                args.gt_ply_dir,
-                args.chamfer_max_dist,
-                inference_time_ms,
-                args.plot,
-            )
-            if metrics is not None:
-                all_scenes_metrics["scenes"][scene] = {
-                    key: float(value)
-                    for key, value in metrics.items()
-                    if key
-                    in [
-                        "chamfer_distance",
-                        "ate",
-                        "are",
-                        "rpe_rot",
-                        "rpe_trans",
-                        "inference_time_ms",
-                    ]
-                }
-                print("Complete metrics", all_scenes_metrics["scenes"][scene])
+            print("🚩Processing", scene, f"Found {len(image_paths)} images")
+            all_cam_to_world_mat = []
+            all_world_points = []
 
-        except Exception as e:
-            print(f"Error processing scene {scene}: {e}")
-            import traceback
+            try:
+                # Load images
+                images = load_images_rgb(image_paths)
 
-            traceback.print_exc()
+                if not images or len(images) < 3:
+                    print(f"Skipping {scene}: insufficient valid images")
+                    continue
 
-    # Summarize average metrics and save
-    compute_average_metrics_and_save(
-        all_scenes_metrics,
-        args.output_path,
-        args.input_frame,
-    )
+                frame_ids = selected_frame_ids
+                images_array = np.stack(images)
+                vgg_input, patch_width, patch_height = get_vgg_input_imgs(images_array)
+                print(f"Patch dimensions: {patch_width}x{patch_height}")
+
+                # Update model attention layers with dynamic patch dimensions
+                model.update_patch_dimensions(patch_width, patch_height)
+
+                # Inference + Reconstruction
+                (
+                    extrinsic_np,
+                    intrinsic_np,
+                    all_world_points,
+                    all_point_colors,
+                    all_cam_to_world_mat,
+                    inference_time_ms,
+                ) = infer_vggt_and_reconstruct(
+                    model, vgg_input, dtype, args.depth_conf_thresh, image_paths
+                )
+                print(f"Inference time: {inference_time_ms:.2f}ms")
+
+                # Process results
+                if not all_cam_to_world_mat or not all_world_points:
+                    print(
+                        f"Skipping {scene}: failed to obtain valid camera poses or point clouds"
+                    )
+                    continue
+
+                # Evaluate and save
+                metrics = evaluate_scene_and_save(
+                    scene,
+                    c2ws,
+                    first_gt_pose,
+                    frame_ids,
+                    all_cam_to_world_mat,
+                    all_world_points,
+                    output_scene_dir,
+                    args.gt_ply_dir,
+                    args.chamfer_max_dist,
+                    inference_time_ms,
+                    args.plot,
+                )
+                if metrics is not None:
+                    all_scenes_metrics["scenes"][scene] = {
+                        key: float(value)
+                        for key, value in metrics.items()
+                        if key
+                        in [
+                            "chamfer_distance",
+                            "ate",
+                            "are",
+                            "rpe_rot",
+                            "rpe_trans",
+                            "inference_time_ms",
+                        ]
+                    }
+                    print("Complete metrics", all_scenes_metrics["scenes"][scene])
+
+            except Exception as e:
+                print(f"Error processing scene {scene}: {e}")
+                import traceback
+
+                traceback.print_exc()
+        
+        # Summarize average metrics and save
+        compute_average_metrics_and_save(
+            all_scenes_metrics,
+            args.output_path,
+            args.input_frame,
+        )

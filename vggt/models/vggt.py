@@ -12,6 +12,7 @@ from vggt.models.aggregator import Aggregator
 from vggt.heads.camera_head import CameraHead
 from vggt.heads.dpt_head import DPTHead
 from vggt.heads.track_head import TrackHead
+from vggt.heads.scale_head import KITTIStereoScaleHead
 
 
 class VGGT(nn.Module, PyTorchModelHubMixin):
@@ -24,6 +25,7 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
         enable_point=False,
         enable_depth=True,
         enable_track=False,
+        enable_scale_head=False,
         merging=0,
         merge_ratio=0.9,
         vis_attn_map=False,
@@ -67,6 +69,13 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
             if enable_track
             else None
         )
+        
+        # KITTI stereo scale prediction head
+        self.scale_head = (
+            KITTIStereoScaleHead(dim_in=2 * embed_dim, use_calibration_features=True)
+            if enable_scale_head
+            else None
+        )
 
     def update_patch_dimensions(self, patch_width: int, patch_height: int):
         """
@@ -98,6 +107,7 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
         images: torch.Tensor,
         query_points: torch.Tensor = None,
         image_paths: list = None,
+        calibration_batch: torch.Tensor = None,
     ):
         """
         Forward pass of the VGGT model.
@@ -110,6 +120,8 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
                 Default: None
             image_paths (list, optional): List of image file paths for attention visualization.
                 Only used when vis_attn_map=True. Default: None
+            calibration_batch (torch.Tensor, optional): Calibration features [B, 2] = [baseline, focal_length]
+                Only used when scale_head is enabled. Default: None
 
         Returns:
             dict: A dictionary containing the following predictions:
@@ -119,6 +131,7 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
                 - world_points (torch.Tensor): 3D world coordinates for each pixel with shape [B, S, H, W, 3]
                 - world_points_conf (torch.Tensor): Confidence scores for world points with shape [B, S, H, W]
                 - images (torch.Tensor): Original input images, preserved for visualization
+                - scale_factor (torch.Tensor, optional): Predicted scale factor [B, 1] from scale_head
 
                 If query_points is provided, also includes:
                 - track (torch.Tensor): Point tracks with shape [B, S, N, 2] (from the last iteration), in pixel coordinates
@@ -183,6 +196,17 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
             predictions["track"] = track_list[-1]  # track of the last iteration
             predictions["vis"] = vis
             predictions["conf"] = conf
+
+        # KITTI stereo scale head prediction
+        if self.scale_head is not None and images.shape[1] == 2 and calibration_batch is not None:
+            # Stereo mode: stereo pair as 2-frame sequence
+            # Pass patch_start_idx to exclude camera/register tokens (consistent with DPTHead)
+            scale_factor = self.scale_head(
+                aggregated_tokens_list[-1],  # Use last layer tokens
+                calibration_features=calibration_batch,
+                patch_start_idx=patch_start_idx
+            )
+            predictions["scale_factor"] = scale_factor  # [B, 1]
 
         if not self.training:
             predictions["images"] = (

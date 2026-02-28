@@ -1,0 +1,122 @@
+# ==================== KITTI Stereo Scale Head Training Configuration ====================
+
+# ==================== 模型配置 ====================
+model:
+  # 预训练模型路径
+  ckpt_path: "/home/hba/Documents/FastVGGT/ckpt/model_tracker_fixed_e20.pt"
+  
+  # 输入图像大小
+  img_size: 518
+  
+  # Patch大小（VGGT的patch_size）
+  patch_size: 14
+  
+  # Embedding维度
+  embed_dim: 1024
+  
+  # Token merging配置
+  # merging: 从第N个block开始执行token合并（0=从第0个block开始，null=禁用merging）
+  merging: 0
+  merge_ratio: 0.9
+
+
+# ==================== 数据集配置 ====================
+data:
+  # KITTI数据集根目录（包含data_scene_flow和data_scene_flow_calib）
+  data_dir: "/home/hba/Documents/Dataset/KITTI"
+  
+  # 原始KITTI分辨率
+  original_size: [1242, 375]
+  
+  # 目标分辨率（VGGT优化尺寸）
+  target_size: [518, 392]
+  
+  # 训练样本数（0-160）
+  train_num: 120
+  
+  # 验证样本数（160-200）
+  val_num: 50
+  
+  # Batch size（应确保每epoch有足够梯度更新次数：120样本/16=8次/epoch）
+  batch_size: 16
+  
+  # 数据加载线程数
+  num_workers: 4
+  
+  # 是否缓存calibration数据
+  enable_calib_cache: true
+  
+  # 图像插值方式
+  resize_interpolation: 'cubic'
+
+
+# ==================== ScaleHead配置 ====================
+scale_head:
+  # 输入维度（2*embed_dim）
+  dim_in: 2048
+  
+  # 隐层维度
+  hidden_dims: [1024, 512]
+  
+  # Dropout比例
+  dropout: 0.1
+  
+  # 是否使用calibration特征
+  use_calibration_features: true
+
+
+# ==================== 训练配置 ====================
+training:
+  # 输出目录（保存checkpoints和logs）
+  output_dir: "./outputs/kitti_scale_head"
+  
+  # 训练epoch数
+  epochs: 200
+  
+  # 学习率
+  lr: 1.0e-4
+  
+  # Weight decay
+  weight_decay: 0.01
+  
+  # Optimizer: AdamW
+  optimizer: "AdamW"
+  
+  # Scheduler: CosineAnnealingLR
+  scheduler: "CosineAnnealingLR"
+  
+  # 早停patience（无改进多少个epoch后停止）
+  early_stopping_patience: 50
+  
+  # 保存checkpoint的间隔
+  save_interval: 5
+  
+  # 损失函数权重
+  loss_weights:
+    scale_loss: 1.0
+
+
+# ==================== 训练提示 ====================
+# 
+# 使用方法：
+# 
+# 1. 修改data_dir指向实际的KITTI数据集路径
+# 2. 修改ckpt_path指向预训练模型的路径
+# 3. 根据需要调整训练参数
+# 4. 运行训练：
+#    python train_scale_head_kitti.py --config configs/train_scale_head_kitti.yaml
+# 
+# 命令行覆盖示例：
+#    python train_scale_head_kitti.py \
+#      --config configs/train_scale_head_kitti.yaml \
+#      --epochs 50 \
+#      --batch_size 16 \
+#      --lr 5e-4 \
+#      --output_dir outputs/scale_head_v2
+# 
+# 预期训练结果（仅供参考）：
+#    - Epoch 1: loss ≈ 0.45, val_error ≈ 12%
+#    - Epoch 5: loss ≈ 0.08, val_error ≈ 4.5%
+#    - Epoch 20: loss ≈ 0.02, val_error ≈ 2-3%
+#
+# ==================== 说明 ====================
