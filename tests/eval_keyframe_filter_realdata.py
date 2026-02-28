@@ -43,10 +43,37 @@ from typing import Tuple, List, Dict, Optional
 
 # 配置中文字体
 def setup_chinese_font():
-    rcParams["font.sans-serif"] = ["SimHei", "DejaVu Sans", "Arial"]
+    # 策略1: 在系统字体目录中查找Noto CJK字体文件并直接用fname加载
+    import glob
+    cjk_font_patterns = [
+        "/usr/share/fonts/**/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/**/NotoSansCJK*.ttc",
+        "/usr/share/fonts/**/NotoSansSC-Regular.otf",
+        "/usr/share/fonts/**/wqy-microhei.ttc",
+        "/usr/share/fonts/**/wqy-zenhei.ttc",
+    ]
+    font_path = None
+    for pattern in cjk_font_patterns:
+        matches = glob.glob(pattern, recursive=True)
+        if matches:
+            font_path = matches[0]
+            break
+
+    if font_path:
+        font_manager.fontManager.addfont(font_path)
+        fp = font_manager.FontProperties(fname=font_path)
+        font_name = fp.get_name()
+        print(f"✓ 使用中文字体: {font_name} ({font_path})")
+    else:
+        # 策略2: 回退到matplotlib内置SimHei
+        font_name = "SimHei"
+        fp = font_manager.FontProperties(family=font_name)
+        print(f"⚠ 未找到系统CJK字体，使用内置SimHei")
+
+    rcParams["font.sans-serif"] = [font_name, "DejaVu Sans", "Arial"]
     rcParams["axes.unicode_minus"] = False
     sns.set_style("whitegrid")
-    return font_manager.FontProperties(family="SimHei")
+    return fp
 
 FONT_PROP = setup_chinese_font()
 
@@ -420,19 +447,32 @@ def plot_cosine_distance_distribution(
     distances_by_seq: Dict[int, np.ndarray],
     output_path: str
 ):
-    """绘制余弦距离分布直方图"""
-    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
-    axes = axes.flatten()
+    """绘制余弦距离分布直方图（自适应子图数量）"""
+    n = len(distances_by_seq)
+    if n == 0:
+        print("⚠ 无余弦距离数据，跳过绘图")
+        return
+    # 自适应网格：尽量接近正方形
+    ncols = min(n, 3)
+    nrows = (n + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 4.5 * nrows))
+    # 统一为1d数组
+    if n == 1:
+        axes = [axes]
+    else:
+        axes = np.array(axes).flatten()
     
     for idx, (seq_len, distances) in enumerate(sorted(distances_by_seq.items())):
-        if idx >= 6:
-            break
         ax = axes[idx]
         ax.hist(distances, bins=20, color="skyblue", edgecolor="black", alpha=0.7)
         ax.set_title(f"序列长度 {seq_len}", fontsize=12, fontproperties=FONT_PROP)
         ax.set_xlabel("余弦距离", fontproperties=FONT_PROP)
         ax.set_ylabel("频数", fontproperties=FONT_PROP)
         ax.grid(True, alpha=0.3)
+    
+    # 隐藏多余的子图
+    for idx in range(n, len(axes)):
+        axes[idx].set_visible(False)
     
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
@@ -461,7 +501,7 @@ def plot_threshold_vs_retention(
     ax.set_xlabel("阈值 τ", fontsize=12, fontproperties=FONT_PROP)
     ax.set_ylabel("保留帧率 (%)", fontsize=12, fontproperties=FONT_PROP)
     ax.set_title("关键帧阈值与保留比例", fontsize=14, fontproperties=FONT_PROP)
-    ax.legend(fontsize=10)
+    ax.legend(fontsize=10, prop=FONT_PROP)
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
@@ -490,7 +530,7 @@ def plot_timing_speedup(
     ax1.set_xlabel("序列长度", fontsize=11, fontproperties=FONT_PROP)
     ax1.set_ylabel("推理时间 (s)", fontsize=11, fontproperties=FONT_PROP)
     ax1.set_title("推理时间对比", fontsize=12, fontproperties=FONT_PROP)
-    ax1.legend(fontsize=10)
+    ax1.legend(fontsize=10, prop=FONT_PROP)
     ax1.grid(True, alpha=0.3, axis="y")
     
     # 加速比
@@ -500,7 +540,7 @@ def plot_timing_speedup(
     ax2.set_xlabel("序列长度", fontsize=11, fontproperties=FONT_PROP)
     ax2.set_ylabel("加速比", fontsize=11, fontproperties=FONT_PROP)
     ax2.set_title("端到端加速倍数", fontsize=12, fontproperties=FONT_PROP)
-    ax2.legend(fontsize=10)
+    ax2.legend(fontsize=10, prop=FONT_PROP)
     ax2.grid(True, alpha=0.3)
     
     plt.tight_layout()
