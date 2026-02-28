@@ -98,6 +98,7 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
         images: torch.Tensor,
         query_points: torch.Tensor = None,
         image_paths: list = None,
+        precomputed_patch_tokens: torch.Tensor = None,
     ):
         """
         Forward pass of the VGGT model.
@@ -110,6 +111,9 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
                 Default: None
             image_paths (list, optional): List of image file paths for attention visualization.
                 Only used when vis_attn_map=True. Default: None
+            precomputed_patch_tokens (torch.Tensor, optional): 预计算的DINOv2 patch token,
+                形状 [B*S, P, C]。由KeyframeFilter生成，可跳过Aggregator内的DINOv2编码
+                实现特征零开销复用。默认 None。
 
         Returns:
             dict: A dictionary containing the following predictions:
@@ -144,7 +148,9 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
             with open(image_paths_file, "wb") as f:
                 pickle.dump(image_paths, f)
 
-        aggregated_tokens_list, patch_start_idx = self.aggregator(images)
+        aggregated_tokens_list, patch_start_idx = self.aggregator(
+            images, precomputed_patch_tokens=precomputed_patch_tokens
+        )
 
         predictions = {}
 

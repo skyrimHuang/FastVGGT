@@ -212,11 +212,18 @@ class Aggregator(nn.Module):
             if hasattr(self.patch_embed, "mask_token"):
                 self.patch_embed.mask_token.requires_grad_(False)
 
-    def forward(self, images: torch.Tensor) -> Tuple[List[torch.Tensor], int]:
+    def forward(
+        self,
+        images: torch.Tensor,
+        precomputed_patch_tokens: Optional[torch.Tensor] = None,
+    ) -> Tuple[List[torch.Tensor], int]:
         """
         Args:
             images (torch.Tensor): Input images with shape [B, S, 3, H, W], in range [0, 1].
                 B: batch size, S: sequence length, 3: RGB channels, H: height, W: width
+            precomputed_patch_tokens (torch.Tensor, optional): 预计算的DINOv2 patch token,
+                形状 [B*S, P, C]。若提供则跳过 patch_embed 编码，直接复用该特征，
+                实现关键帧预过滤场景下的零开销特征直通。默认 None（走原始编码路径）。
 
         Returns:
             (list[torch.Tensor], int):
@@ -228,18 +235,22 @@ class Aggregator(nn.Module):
         if C_in != 3:
             raise ValueError(f"Expected 3 input channels, got {C_in}")
 
-        # Normalize images and reshape for patch embed - ensure bf16 computation
-        images = images.to(torch.bfloat16)
-        images = (images - self._resnet_mean) / self._resnet_std
+        if precomputed_patch_tokens is not None:
+            # 特征复用路径: 跳过DINOv2编码，直接使用预计算的patch token
+            patch_tokens = precomputed_patch_tokens.to(torch.bfloat16)
+        else:
+            # 原始路径: 归一化 + DINOv2编码
+            images = images.to(torch.bfloat16)
+            images = (images - self._resnet_mean) / self._resnet_std
 
-        images = images.view(B * S, C_in, H, W)
-        patch_tokens = self.patch_embed(images)
-        del images
+            images = images.view(B * S, C_in, H, W)
+            patch_tokens = self.patch_embed(images)
+            del images
 
-        if isinstance(patch_tokens, dict):
-            patch_tokens = patch_tokens["x_norm_patchtokens"]
+            if isinstance(patch_tokens, dict):
+                patch_tokens = patch_tokens["x_norm_patchtokens"]
 
-        patch_tokens = patch_tokens.to(torch.bfloat16)
+            patch_tokens = patch_tokens.to(torch.bfloat16)
 
         _, P, C = patch_tokens.shape
 
