@@ -275,7 +275,7 @@ def evaluate_reuse_consistency(
             depth1 = pred1["depth"] if "depth" in pred1 else None
             
             # 路径2: 过滤后使用复用特征
-            filter_result = filter_model(images.cpu())
+            filter_result = filter_model(images)
             filtered_images = filter_result["filtered_images"].to(device, dtype=torch.float32)
             patch_tokens = filter_result["patch_tokens"].to(device, dtype=torch.bfloat16)
             
@@ -350,7 +350,7 @@ def evaluate_timing(
         
         # 过滤时间
         t0 = time.time()
-        filter_result = filter_model(images.cpu())
+        filter_result = filter_model(images)
         torch.cuda.synchronize(device)
         t_filter = time.time() - t0
         

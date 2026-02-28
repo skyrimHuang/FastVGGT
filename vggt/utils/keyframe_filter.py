@@ -73,16 +73,17 @@ class KeyframeFilter:
         """
         B, S, C, H, W = images.shape
 
-        # 保持float32进行归一化，避免dtype mismatch，然后转为bfloat16
+        # 保持float32进行归一化，避免dtype mismatch
+        # 让autocast的上下文管理自动type转换（不要手动转为bfloat16）
         images_norm = images.float()
-        resnet_mean = self._resnet_mean.float()
-        resnet_std = self._resnet_std.float()
+        resnet_mean = self._resnet_mean.float().to(images.device)
+        resnet_std = self._resnet_std.float().to(images.device)
         images_norm = (images_norm - resnet_mean) / resnet_std
-        # 转为bfloat16用于编码器（如果编码器期望）
-        images_norm = images_norm.to(torch.bfloat16)
+        # 注意:不显式转为bfloat16，保持float32
+        # autocast会在调用patch_embed时自动处理dtype提升
         images_flat = images_norm.view(B * S, C, H, W)
 
-        # 调用DINOv2编码器
+        # 调用DINOv2编码器（dtype转换由autocast自动处理）
         features = self.patch_embed(images_flat)
 
         if isinstance(features, dict):
@@ -95,9 +96,10 @@ class KeyframeFilter:
             cls_tokens = features.mean(dim=1)  # 用 patch 均值近似全局特征
 
         cls_tokens = cls_tokens.view(B, S, -1)
-        patch_tokens = patch_tokens.to(torch.bfloat16)
+        # 输出结果转为float32便于后续操作
+        patch_tokens = patch_tokens.float()
 
-        return cls_tokens, patch_tokens
+        return cls_tokens.float(), patch_tokens
 
     @torch.no_grad()
     def select_keyframes(

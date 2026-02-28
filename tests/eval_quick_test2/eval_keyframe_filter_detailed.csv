@@ -1,0 +1,2 @@
+sequence_length,threshold,compression_ratio,time_no_filter,time_filter,time_inference_filtered,time_total,speedup,peak_memory_mb
+5,0.35,0.4,0.7360750436782837,0.37825942039489746,0.2907930016517639,0.6690524220466614,1.1001754413003948,7790.06982421875
