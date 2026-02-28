@@ -229,11 +229,12 @@ def evaluate_feature_discrimination(
     aggregator = model.aggregator
     filter_model = KeyframeFilter(aggregator=aggregator, threshold=0.35)
     
-    images = images.to(device, dtype=torch.float16)
+    images = images.to(device, dtype=torch.float32)
     B, S = images.shape[:2]
     
     with torch.no_grad():
-        cls_tokens, _ = filter_model.extract_features(images)
+        with torch.cuda.amp.autocast(dtype=torch.float16):
+            cls_tokens, _ = filter_model.extract_features(images)
     
     cls_tokens = cls_tokens[0]  # [S, D]
     cls_norm = F.normalize(cls_tokens.float(), dim=1)
@@ -265,20 +266,21 @@ def evaluate_reuse_consistency(
     aggregator = model.aggregator
     filter_model = KeyframeFilter(aggregator=aggregator, threshold=threshold)
     
-    images = images.to(device, dtype=torch.float16)
+    images = images.to(device, dtype=torch.float32)
     
     with torch.no_grad():
-        # 路径1: 直接输入（无过滤、无复用）
-        pred1 = model(images)
-        depth1 = pred1["depth"] if "depth" in pred1 else None
-        
-        # 路径2: 过滤后使用复用特征
-        filter_result = filter_model(images.cpu())
-        filtered_images = filter_result["filtered_images"].to(device, dtype=torch.float16)
-        patch_tokens = filter_result["patch_tokens"].to(device, dtype=torch.bfloat16)
-        
-        pred2 = model(filtered_images, precomputed_patch_tokens=patch_tokens)
-        depth2 = pred2["depth"] if "depth" in pred2 else None
+        with torch.cuda.amp.autocast(dtype=torch.float16):
+            # 路径1: 直接输入（无过滤、无复用）
+            pred1 = model(images)
+            depth1 = pred1["depth"] if "depth" in pred1 else None
+            
+            # 路径2: 过滤后使用复用特征
+            filter_result = filter_model(images.cpu())
+            filtered_images = filter_result["filtered_images"].to(device, dtype=torch.float32)
+            patch_tokens = filter_result["patch_tokens"].to(device, dtype=torch.bfloat16)
+            
+            pred2 = model(filtered_images, precomputed_patch_tokens=patch_tokens)
+            depth2 = pred2["depth"] if "depth" in pred2 else None
     
     # 计算深度误差（仅在两个预测都存在时）
     errors = {}
@@ -317,12 +319,13 @@ def evaluate_timing(
     aggregator = model.aggregator
     filter_model = KeyframeFilter(aggregator=aggregator, threshold=threshold)
     
-    images = images.to(device, dtype=torch.float16)
+    images = images.to(device, dtype=torch.float32)
     
     # 预热
     with torch.no_grad():
-        _ = model(images)
-        torch.cuda.synchronize(device)
+        with torch.cuda.amp.autocast(dtype=torch.float16):
+            _ = model(images)
+            torch.cuda.synchronize(device)
     
     # 测试1: 无过滤
     times_no_filter = []
@@ -331,7 +334,8 @@ def evaluate_timing(
         torch.cuda.synchronize(device)
         t0 = time.time()
         with torch.no_grad():
-            _ = model(images)
+            with torch.cuda.amp.autocast(dtype=torch.float16):
+                _ = model(images)
         torch.cuda.synchronize(device)
         times_no_filter.append(time.time() - t0)
     
@@ -350,14 +354,15 @@ def evaluate_timing(
         torch.cuda.synchronize(device)
         t_filter = time.time() - t0
         
-        filtered_images = filter_result["filtered_images"].to(device, dtype=torch.float16)
+        filtered_images = filter_result["filtered_images"].to(device, dtype=torch.float32)
         patch_tokens = filter_result["patch_tokens"].to(device, dtype=torch.bfloat16)
         
         # 推理时间
         torch.cuda.synchronize(device)
         t0 = time.time()
         with torch.no_grad():
-            _ = model(filtered_images, precomputed_patch_tokens=patch_tokens)
+            with torch.cuda.amp.autocast(dtype=torch.float16):
+                _ = model(filtered_images, precomputed_patch_tokens=patch_tokens)
         torch.cuda.synchronize(device)
         t_inference = time.time() - t0
         
@@ -389,13 +394,14 @@ def evaluate_memory_usage(
     """
     评估显存使用。
     """
-    images = images.to(device, dtype=torch.float16)
+    images = images.to(device, dtype=torch.float32)
     
     torch.cuda.reset_peak_memory_stats(device)
     torch.cuda.empty_cache()
     
     with torch.no_grad():
-        _ = model(images)
+        with torch.cuda.amp.autocast(dtype=torch.float16):
+            _ = model(images)
     
     torch.cuda.synchronize(device)
     peak_memory = torch.cuda.max_memory_allocated(device) / 1024 / 1024  # MB
@@ -573,6 +579,7 @@ def main(args):
         print(f"⚠ 未找到检查点: {args.ckpt_path}，使用随机初始化")
     
     model = model.to(device).eval()
+    # 注意：不转为float16，使用torch.cuda.amp.autocast处理混合精度
     
     # 解析参数
     sequence_lengths = [int(x) for x in args.sequence_lengths.split(",")]

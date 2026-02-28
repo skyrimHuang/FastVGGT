@@ -45,6 +45,8 @@ class MockPatchEmbed(torch.nn.Module):
     
     def forward(self, x):
         B = x.shape[0]
+        # 保持float32进行conv，避免dtype mismatch
+        x = x.float()
         patches = self.proj(x)  # [B, C, H', W']
         pH, pW = patches.shape[2], patches.shape[3]
         P = pH * pW

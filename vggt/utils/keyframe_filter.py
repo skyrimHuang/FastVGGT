@@ -73,9 +73,13 @@ class KeyframeFilter:
         """
         B, S, C, H, W = images.shape
 
-        # 与 Aggregator.forward 第232-235行完全一致的归一化
-        images_norm = images.to(torch.bfloat16)
-        images_norm = (images_norm - self._resnet_mean) / self._resnet_std
+        # 保持float32进行归一化，避免dtype mismatch，然后转为bfloat16
+        images_norm = images.float()
+        resnet_mean = self._resnet_mean.float()
+        resnet_std = self._resnet_std.float()
+        images_norm = (images_norm - resnet_mean) / resnet_std
+        # 转为bfloat16用于编码器（如果编码器期望）
+        images_norm = images_norm.to(torch.bfloat16)
         images_flat = images_norm.view(B * S, C, H, W)
 
         # 调用DINOv2编码器
