@@ -1,0 +1,4 @@
+dataset,scene,method,threshold,frames,success,inference_time_ms,memory_mb,compression_ratio,error,kept_frames
+7scenes,chess,no_filter,,5,True,1041.299819946289,3164.42529296875,1.0,,
+7scenes,chess,filter,0.3,5,True,303.8461208343506,2751.14501953125,0.4,,2.0
+7scenes,chess,filter,0.5,5,True,232.96666145324707,2751.14501953125,0.4,,2.0
