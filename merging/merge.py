@@ -1,4 +1,5 @@
 import torch
+import os
 from typing import Tuple, Callable, Optional, Union
 
 
@@ -56,6 +57,7 @@ def token_merge_bipartite2d(
     generator: Optional[torch.Generator] = None,
     enable_protection: bool = False,
     use_norm_guided: bool = False,
+    use_variance: bool = False,
 ) -> Tuple[Callable, Callable]:
     """
     Divide tokens into source (src) and destination (dst) groups, and merge r tokens from src to dst.
@@ -63,6 +65,7 @@ def token_merge_bipartite2d(
     Strategies:
     1. Grid-based split (default): Divide tokens spatially into grid blocks
     2. Norm-Guided Anchoring: Use L2 norm to protect high-importance tokens
+    3. Variance Top-K Anchoring: Use per-token feature variance to protect high-importance tokens
     
     Merging uses Top-K strategy: Select top r pairs with highest cosine similarity.
 
@@ -77,6 +80,7 @@ def token_merge_bipartite2d(
      - generator: Random number generator if no_rand is False and not None
      - enable_protection: If True, enable importance protection (protect high-norm tokens)
      - use_norm_guided: If True, use L2 norm-based split instead of grid-based
+    - use_variance: If True, use variance-based split instead of grid-based
 
     Returns:
      - (merge, unmerge): Two functions for merging tokens and restoring pre-merge state
@@ -96,6 +100,9 @@ def token_merge_bipartite2d(
         if use_norm_guided and enable_protection:
             # Initialize idx_buffer
             idx_buffer_seq = torch.zeros(N, device=metric.device, dtype=torch.int64)
+
+            norm_protected_ratio = float(os.environ.get("FASTVGGT_NORM_PROTECTED_RATIO", "0.10"))
+            norm_dst_ratio = float(os.environ.get("FASTVGGT_NORM_DST_RATIO", "0.10"))
             
             # 🔧 FIX: Preserve first frame as all-dst (critical for multi-view geometry)
             if num_imgs > 0:
@@ -115,9 +122,10 @@ def token_merge_bipartite2d(
                 # Sort by norm descending (high norm = high importance)
                 sorted_indices_local = torch.argsort(avg_norms, descending=True)
                 
-                # Three-tier partitioning on remaining tokens (10% protected, 40% dst, 50% src)
-                num_protected = int(N_remaining * 0.10)
-                num_dst = int(N_remaining * 0.40)
+                # Three-tier partitioning on remaining tokens
+                # (10% salient/protected, 10% geometric anchors(dst), 80% redundant(src))
+                num_protected = int(N_remaining * norm_protected_ratio)
+                num_dst = int(N_remaining * norm_dst_ratio)
                 
                 protected_indices_local = sorted_indices_local[:num_protected]
                 dst_indices_local = sorted_indices_local[num_protected:num_protected + num_dst]
@@ -128,20 +136,76 @@ def token_merge_bipartite2d(
                 dst_indices_global = dst_indices_local + remaining_start
                 src_indices_global = src_indices_local + remaining_start
                 
-                # Update idx_buffer for remaining frames
-                idx_buffer_seq[dst_indices_global] = -1
-                idx_buffer_seq[src_indices_global] = torch.arange(len(src_indices_global), device=metric.device)
+                # 🔧 FIX: Update idx_buffer for remaining frames
+                # Use -2 for protected, -1 for dst, 0+ for src to avoid confusion
+                idx_buffer_seq[protected_indices] = -2  # Protected tokens: -2 (special marker)
+                idx_buffer_seq[dst_indices_global] = -1  # Dst tokens: -1
+                idx_buffer_seq[src_indices_global] = torch.arange(len(src_indices_global), device=metric.device)  # Src: 0, 1, 2, ...
             else:
                 # Only one frame, all tokens protected as dst
                 protected_indices = torch.arange(N, device=metric.device)
             
+        # ============ Variance Top-K Anchoring (方案二) ============
+        elif use_variance and enable_protection:
+            # Initialize idx_buffer
+            idx_buffer_seq = torch.zeros(N, device=metric.device, dtype=torch.int64)
+
+            # Preserve first frame as all-dst (critical for multi-view geometry)
+            if num_imgs > 0:
+                idx_buffer_seq[:tokens_per_img] = -1
+
+            # Apply variance-guided only to remaining frames (if any)
+            if num_imgs > 1:
+                remaining_start = tokens_per_img
+                remaining_tokens = metric[:, remaining_start:, :]  # [B, N_remaining, C]
+                N_remaining = N - tokens_per_img
+
+                # Compute feature variance for remaining tokens
+                token_variances = remaining_tokens.var(dim=-1, unbiased=False)  # [B, N_remaining]
+                avg_variances = token_variances.mean(dim=0)  # [N_remaining]
+
+                # Sort by variance descending (high variance = high importance)
+                sorted_indices_local = torch.argsort(avg_variances, descending=True)
+
+                # Three-tier partitioning on remaining tokens (10% protected, 40% dst, 50% src)
+                num_protected = int(N_remaining * 0.10)
+                num_dst = int(N_remaining * 0.40)
+
+                protected_indices_local = sorted_indices_local[:num_protected]
+                dst_indices_local = sorted_indices_local[num_protected:num_protected + num_dst]
+                src_indices_local = sorted_indices_local[num_protected + num_dst:]
+
+                # Convert to global indices
+                protected_indices = protected_indices_local + remaining_start
+                dst_indices_global = dst_indices_local + remaining_start
+                src_indices_global = src_indices_local + remaining_start
+
+                # Update idx_buffer for remaining frames
+                # Use -2 for protected, -1 for dst, 0+ for src to avoid confusion
+                idx_buffer_seq[protected_indices] = -2  # Protected tokens: -2
+                idx_buffer_seq[dst_indices_global] = -1  # Dst tokens: -1
+                idx_buffer_seq[src_indices_global] = torch.arange(len(src_indices_global), device=metric.device)  # Src: 0, 1, 2, ...
+            else:
+                # Only one frame, all tokens protected as dst
+                protected_indices = torch.arange(N, device=metric.device)
+
         # ============ Original Grid-Based Split (fallback) ============
         elif enable_protection:
-            num_protected = int(N * 0.1)
-            step = max(1, N // num_protected)
-            protected_indices = torch.arange(0, N, step, device=metric.device)[
-                :num_protected
-            ]
+            # Sample protected tokens only from non-anchor frames to avoid re-labeling frame-0 dst tokens
+            if num_imgs > 1:
+                remaining_start = tokens_per_img
+                N_remaining = N - tokens_per_img
+                num_protected = int(N_remaining * 0.1)
+                if num_protected > 0:
+                    step = max(1, N_remaining // num_protected)
+                    protected_indices = remaining_start + torch.arange(
+                        0, N_remaining, step, device=metric.device
+                    )[:num_protected]
+                else:
+                    protected_indices = torch.empty(0, device=metric.device, dtype=torch.long)
+            else:
+                num_protected = 0
+                protected_indices = torch.empty(0, device=metric.device, dtype=torch.long)
             idx_buffer_seq = torch.zeros(N, device=metric.device, dtype=torch.int64)
         else:
             protected_indices = None
@@ -222,13 +286,31 @@ def token_merge_bipartite2d(
                         idx_buffer_seq[grid_start : grid_start + effective_grid_size] = (
                             flat_view
                         )
+        
+        # 🔧 FIX: Mark protected tokens for grid-based method (consistency with norm-guided)
+        if enable_protection and not use_norm_guided:
+            idx_buffer_seq[protected_indices] = -2  # Protected tokens: -2
 
+        # 🔧 FIX: Sort idx_buffer and correctly partition into protected/dst/src
         rand_idx = idx_buffer_seq.reshape(1, -1, 1).argsort(dim=1)
+        
+        # Count each type (after sorting: -2(protected), -1(dst), 0+(src))
+        num_protected_buffer = int((idx_buffer_seq == -2).sum()) if enable_protection else 0
         num_dst_orig = int((idx_buffer_seq == -1).sum())
-
-        # Original src and dst indices
-        a_idx_orig = rand_idx[:, num_dst_orig:, :]
-        b_idx_orig = rand_idx[:, :num_dst_orig, :]
+        num_src_buffer = N - num_protected_buffer - num_dst_orig
+        
+        # Partition indices: [protected | dst | src]
+        # Protected tokens should NOT be in a_idx, they're handled separately via protected_idx
+        if enable_protection and num_protected_buffer > 0:
+            # Skip protected tokens (first num_protected_buffer after sorting)
+            a_idx_orig = rand_idx[:, num_protected_buffer + num_dst_orig:, :]  # Only real src tokens
+            b_idx_orig = rand_idx[:, num_protected_buffer:num_protected_buffer + num_dst_orig, :]  # Dst tokens
+            # Protected tokens are handled separately via protected_idx
+        else:
+            # No protection enabled (all tokens treated as src or dst)
+            a_idx_orig = rand_idx[:, num_dst_orig:, :]
+            b_idx_orig = rand_idx[:, :num_dst_orig, :]
+        
         a_idx = a_idx_orig
         b_idx = b_idx_orig
 
@@ -265,7 +347,10 @@ def token_merge_bipartite2d(
         else:
             a, b = split(metric)
 
-        r = min(a.shape[1], r)
+        if use_norm_guided and enable_protection:
+            r = a.shape[1]
+        else:
+            r = min(a.shape[1], r)
         num_src_actual = a.shape[1]
         chunk_size = min(5000, num_src_actual)
 

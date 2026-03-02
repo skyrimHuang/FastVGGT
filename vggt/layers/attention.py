@@ -41,6 +41,7 @@ class Attention(nn.Module):
         patch_height: int = 28,
         merge_ratio: float = 0.9,
         use_norm_guided: bool = False,
+        use_variance: bool = False,
     ) -> None:
         super().__init__()
         assert dim % num_heads == 0, "dim should be divisible by num_heads"
@@ -52,6 +53,7 @@ class Attention(nn.Module):
         self.fused_attn = fused_attn
         self.merge_ratio = merge_ratio
         self.use_norm_guided = use_norm_guided
+        self.use_variance = use_variance
 
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
         self.q_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
@@ -183,6 +185,7 @@ class Attention(nn.Module):
                 generator,
                 enable_protection=True,
                 use_norm_guided=self.use_norm_guided,
+                use_variance=self.use_variance,
             )
 
             m_a, u_a = (m, u)

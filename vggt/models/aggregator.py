@@ -75,6 +75,7 @@ class Aggregator(nn.Module):
         merge_ratio=0.9,
         vis_attn_map=False,
         use_norm_guided=False,
+        use_variance=False,
     ):
         super().__init__()
 
@@ -92,6 +93,7 @@ class Aggregator(nn.Module):
         self.merge_ratio = merge_ratio
         self.vis_attn_map = vis_attn_map
         self.use_norm_guided = use_norm_guided
+        self.use_variance = use_variance
         self.frame_blocks = nn.ModuleList(
             [
                 block_fn(
@@ -106,6 +108,7 @@ class Aggregator(nn.Module):
                     rope=self.rope,
                     merge_ratio=merge_ratio,
                     use_norm_guided=use_norm_guided,
+                    use_variance=use_variance,
                 )
                 for _ in range(depth)
             ]
@@ -125,6 +128,7 @@ class Aggregator(nn.Module):
                     rope=self.rope,
                     merge_ratio=merge_ratio,
                     use_norm_guided=use_norm_guided,
+                    use_variance=use_variance,
                 )
                 for _ in range(depth)
             ]

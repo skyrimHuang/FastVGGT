@@ -43,6 +43,7 @@ class Block(nn.Module):
         merging=0,
         merge_ratio=0.9,
         use_norm_guided=False,
+        use_variance=False,
     ) -> None:
         super().__init__()
 
@@ -60,6 +61,7 @@ class Block(nn.Module):
             rope=rope,
             merge_ratio=merge_ratio,
             use_norm_guided=use_norm_guided,
+            use_variance=use_variance,
         )
 
         self.ls1 = (

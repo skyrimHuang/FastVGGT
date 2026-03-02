@@ -5,6 +5,7 @@ import torch
 import os
 import sys
 import yaml
+import json
 
 # Ensure project root is in sys.path for absolute imports like `vggt.*`
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
@@ -84,7 +85,31 @@ if __name__ == "__main__":
         action="store_true",
         help="Use L2 norm-guided anchoring instead of grid-based split",
     )
+    parser.add_argument(
+        "--use_variance",
+        action="store_true",
+        help="Use variance Top-K anchoring instead of grid-based split",
+    )
+    parser.add_argument(
+        "--norm_protected_ratio",
+        type=float,
+        default=0.10,
+        help="Norm-guided: protected token ratio (for testing different partition ratios)",
+    )
+    parser.add_argument(
+        "--norm_dst_ratio",
+        type=float,
+        default=0.10,
+        help="Norm-guided: destination anchor token ratio (for testing different partition ratios)",
+    )
+    parser.add_argument(
+        "--no_cache",
+        action="store_true",
+        help="Disable metrics cache, force recomputation of all metrics",
+    )
     args = parser.parse_args()
+    if args.use_norm_guided and args.use_variance:
+        raise ValueError("--use_norm_guided and --use_variance cannot be enabled together")
     torch.manual_seed(33)
 
     # Scene sampling
@@ -106,6 +131,7 @@ if __name__ == "__main__":
         merge_ratio=args.merge_ratio,
         vis_attn_map=args.vis_attn_map,
         use_norm_guided=args.use_norm_guided,
+        use_variance=args.use_variance,
     )
     ckpt = torch.load(args.ckpt_path, map_location="cpu")
     incompat = model.load_state_dict(ckpt, strict=False)
@@ -113,10 +139,28 @@ if __name__ == "__main__":
     model = model.to(torch.float16)
 
     # Process each scene
-    for scene in scannet_scenes[:2]:
+    for scene in scannet_scenes:
         scene_dir = args.data_dir / f"{scene}"
         output_scene_dir = args.output_path / f"input_frame_{args.input_frame}" / scene
-        if (output_scene_dir / "metrics.json").exists():
+        
+        # If metrics already exist, load them instead of recomputing (skip if --no_cache)
+        metrics_file = output_scene_dir / "metrics.json"
+        if metrics_file.exists() and not args.no_cache:
+            print(f"Loading existing metrics for {scene}")
+            with open(metrics_file, "r") as f:
+                metrics = json.load(f)
+            all_scenes_metrics["scenes"][scene] = {
+                key: float(value)
+                for key, value in metrics.items()
+                if key in [
+                    "chamfer_distance",
+                    "ate",
+                    "are",
+                    "rpe_rot",
+                    "rpe_trans",
+                    "inference_time_ms",
+                ]
+            }
             continue
 
         # Load scene data
