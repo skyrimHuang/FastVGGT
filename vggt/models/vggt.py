@@ -28,13 +28,15 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
         merge_ratio=0.9,
         vis_attn_map=False,
         use_norm_guided=False,
-        use_variance=False,
+        norm_protected_ratio=0.10,
+        norm_dst_ratio=0.40,
     ):
         super().__init__()
 
         self.vis_attn_map = vis_attn_map
         self.use_norm_guided = use_norm_guided
-        self.use_variance = use_variance
+        self.norm_protected_ratio = norm_protected_ratio
+        self.norm_dst_ratio = norm_dst_ratio
 
         self.aggregator = Aggregator(
             img_size=img_size,
@@ -44,7 +46,8 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
             merge_ratio=merge_ratio,
             vis_attn_map=vis_attn_map,
             use_norm_guided=use_norm_guided,
-            use_variance=use_variance,
+            norm_protected_ratio=norm_protected_ratio,
+            norm_dst_ratio=norm_dst_ratio,
         )
 
         self.camera_head = CameraHead(dim_in=2 * embed_dim) if enable_camera else None

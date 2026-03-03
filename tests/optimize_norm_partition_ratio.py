@@ -50,15 +50,13 @@ def test_ratio(protected_ratio: float, dst_ratio: float, src_ratio: float) -> Di
             "--merging", "0",
             "--merge_ratio", "0.7",
             "--use_norm_guided",
+            "--norm_protected_ratio", str(protected_ratio),
+            "--norm_dst_ratio", str(dst_ratio),
             "--no_cache",  # Ensure fresh evaluation
             "--output_path", str(output_path)
         ]
-
-        env = os.environ.copy()
-        env["FASTVGGT_NORM_PROTECTED_RATIO"] = str(protected_ratio)
-        env["FASTVGGT_NORM_DST_RATIO"] = str(dst_ratio)
         
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         
         if result.returncode == 0:
             output = result.stdout

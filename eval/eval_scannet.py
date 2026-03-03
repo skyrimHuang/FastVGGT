@@ -86,11 +86,6 @@ if __name__ == "__main__":
         help="Use L2 norm-guided anchoring instead of grid-based split",
     )
     parser.add_argument(
-        "--use_variance",
-        action="store_true",
-        help="Use variance Top-K anchoring instead of grid-based split",
-    )
-    parser.add_argument(
         "--norm_protected_ratio",
         type=float,
         default=0.10,
@@ -99,7 +94,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--norm_dst_ratio",
         type=float,
-        default=0.10,
+        default=0.40,
         help="Norm-guided: destination anchor token ratio (for testing different partition ratios)",
     )
     parser.add_argument(
@@ -108,8 +103,6 @@ if __name__ == "__main__":
         help="Disable metrics cache, force recomputation of all metrics",
     )
     args = parser.parse_args()
-    if args.use_norm_guided and args.use_variance:
-        raise ValueError("--use_norm_guided and --use_variance cannot be enabled together")
     torch.manual_seed(33)
 
     # Scene sampling
@@ -131,7 +124,8 @@ if __name__ == "__main__":
         merge_ratio=args.merge_ratio,
         vis_attn_map=args.vis_attn_map,
         use_norm_guided=args.use_norm_guided,
-        use_variance=args.use_variance,
+        norm_protected_ratio=args.norm_protected_ratio,
+        norm_dst_ratio=args.norm_dst_ratio,
     )
     ckpt = torch.load(args.ckpt_path, map_location="cpu")
     incompat = model.load_state_dict(ckpt, strict=False)
