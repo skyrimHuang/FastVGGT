@@ -171,8 +171,8 @@ def main():
     merge_ratio = 0.90
     
     # L2范数配置：使用推荐配置
-    protected_ratio = 0.10
-    dst_ratio = 0.40  # 可选：改为0.40进行参数对比
+    protected_ratio = 0.2
+    dst_ratio = 0.6
     
     results = []
     

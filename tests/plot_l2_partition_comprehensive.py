@@ -19,22 +19,64 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
-from matplotlib import rcParams
+from matplotlib import rcParams, font_manager
 from pathlib import Path
 import warnings
 warnings.filterwarnings('ignore')
 
 
 def setup_chinese_font():
-    """设置中文字体，确保无乱码"""
-    try:
-        # 尝试使用系统字体
-        matplotlib.rcParams['font.sans-serif'] = ['DejaVu Sans', 'WenQuanYi Micro Hei', 'SimHei', 'Arial Unicode MS']
-        matplotlib.rcParams['font.monospace'] = ['DejaVu Sans Mono', 'Courier New']
-        matplotlib.rcParams['axes.unicode_minus'] = False
-        matplotlib.rcParams['font.size'] = 10
-    except:
-        pass
+    """设置中文字体，优先使用系统中可用的CJK字体，避免乱码。"""
+    # 常见中文字体族名称（按优先级）
+    candidate_families = [
+        'Noto Sans CJK SC',
+        'Noto Sans CJK JP',
+        'WenQuanYi Micro Hei',
+        'WenQuanYi Zen Hei',
+        'SimHei',
+        'Microsoft YaHei',
+        'PingFang SC',
+        'Source Han Sans CN',
+        'AR PL UMing CN',
+    ]
+
+    # 常见Linux字体文件路径（存在则动态注册）
+    candidate_font_files = [
+        '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+        '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
+        '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+        '/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc',
+        '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+        '/usr/share/fonts/truetype/noto/NotoSansSC-Regular.ttf',
+    ]
+
+    # 1) 注册本机存在的字体文件
+    for font_file in candidate_font_files:
+        try:
+            if Path(font_file).exists():
+                font_manager.fontManager.addfont(font_file)
+        except Exception:
+            continue
+
+    # 2) 在当前matplotlib字体库中查找可用中文字体
+    available_families = {f.name for f in font_manager.fontManager.ttflist}
+    selected_family = next((f for f in candidate_families if f in available_families), None)
+
+    # 3) 强制设置全局字体（不要把DejaVu放在前面）
+    if selected_family is not None:
+        rcParams['font.family'] = [selected_family]
+        rcParams['font.sans-serif'] = [selected_family]
+        print(f"✓ 中文字体已启用: {selected_family}")
+    else:
+        # 兜底：即使没有中文字体也给出明确警告，方便用户安装
+        rcParams['font.family'] = ['DejaVu Sans']
+        rcParams['font.sans-serif'] = ['DejaVu Sans']
+        print("⚠️ 未检测到可用中文字体，中文可能显示为方块。")
+        print("   建议安装: sudo apt-get install fonts-noto-cjk 或 fonts-wqy-microhei")
+
+    rcParams['font.monospace'] = ['DejaVu Sans Mono', 'Courier New']
+    rcParams['axes.unicode_minus'] = False
+    rcParams['font.size'] = 10
 
 
 def load_results(csv_path):
@@ -76,7 +118,7 @@ def create_cd_comparison_chart(df, output_dir):
     
     ax1.set_xlabel('序列长度(帧数)', fontsize=11, fontweight='bold')
     ax1.set_ylabel('CD (cm)', fontsize=11, fontweight='bold')
-    ax1.set_title('Chamfer Distance 絕對值对比', fontsize=12)
+    ax1.set_title('Chamfer Distance 绝对值对比', fontsize=12)
     ax1.set_xticks(x)
     ax1.set_xticklabels([f'{int(fc)}F' for fc in frame_counts])
     ax1.legend(loc='upper right', fontsize=10)
@@ -99,18 +141,20 @@ def create_cd_comparison_chart(df, output_dir):
         improvements.append(improvement)
     
     colors = ['#27ae60' if imp > 0 else '#e74c3c' for imp in improvements]
-    ax2.plot(frame_counts, improvements, marker='o', linewidth=2.5, markersize=8, color='#27ae60', label='CD改进率')
-    ax2.fill_between(frame_counts, 0, improvements, alpha=0.3, color='#27ae60')
+    x_pos = np.arange(len(frame_counts))  # 使用索引坐标
+    ax2.plot(x_pos, improvements, marker='o', linewidth=2.5, markersize=8, color='#27ae60', label='CD改进率')
+    ax2.fill_between(x_pos, 0, improvements, alpha=0.3, color='#27ae60')
     
     # 添加改进百分比标签
-    for fc, imp in zip(frame_counts, improvements):
-        ax2.text(fc, imp + 0.5, f'{imp:+.1f}%', ha='center', fontsize=10, fontweight='bold')
+    for i, (fc, imp) in enumerate(zip(frame_counts, improvements)):
+        ax2.text(i, imp + 0.5, f'{imp:+.1f}%', ha='center', fontsize=10, fontweight='bold')
     
     ax2.axhline(y=0, color='black', linestyle='--', linewidth=1, alpha=0.5)
     ax2.set_xlabel('序列长度(帧数)', fontsize=11, fontweight='bold')
     ax2.set_ylabel('CD改进率 (%)', fontsize=11, fontweight='bold')
     ax2.set_title('L2范数方法相对改进', fontsize=12)
     ax2.grid(True, alpha=0.3, linestyle='--')
+    ax2.set_xticks(x_pos)
     ax2.set_xticklabels([f'{int(fc)}F' for fc in frame_counts])
     
     # 颜色标注
@@ -233,14 +277,9 @@ def create_accuracy_speed_tradeoff(df, output_dir):
     
     ax.set_xlabel('推理时间 (ms)', fontsize=12, fontweight='bold')
     ax.set_ylabel('几何精度 CD (cm)', fontsize=12, fontweight='bold')
-    ax.set_title('精度-性能权衡分析(越左下越优)', fontsize=13, fontweight='bold')
+    ax.set_title('精度-性能权衡分析', fontsize=13, fontweight='bold')
     ax.legend(loc='best', fontsize=11)
     ax.grid(True, alpha=0.3, linestyle='--')
-    
-    # 标注改进方向
-    ax.annotate('改进方向\n(精度↑ 速度↑)', xy=(0.15, 0.15), xycoords='axes fraction',
-               fontsize=10, ha='center', color='#27ae60', fontweight='bold',
-               bbox=dict(boxstyle='round', facecolor='#27ae60', alpha=0.2))
     
     plt.tight_layout()
     output_path = output_dir / 'accuracy_speed_tradeoff.png'
