@@ -1,0 +1,17 @@
+{
+  "config": {
+    "data_dir": "/home/hba/Documents/Dataset/KITTI",
+    "ckpt_path": "ckpt/model_tracker_fixed_e20.pt",
+    "scale_head_ckpt": "outputs/kitti_scale_head/checkpoints/scale_head_best.pt",
+    "output_dir": "outputs/scalehead_precision_eval_v2",
+    "train_num": 120,
+    "val_num": 50,
+    "device": "cuda"
+  },
+  "summary": {
+    "num_samples": 50,
+    "num_skipped": 0,
+    "scale_error_mean": 15.543926757936761,
+    "scale_error_median": 12.194661163243829,
+    "scale_error_std": 14.681678099314528,
+    "baseline_abs_rel_mean": 

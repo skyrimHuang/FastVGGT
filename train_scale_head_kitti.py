@@ -107,8 +107,13 @@ class TrainingHistory:
         """
         # 保存为JSON
         try:
+            serializable_history = {}
+            for key, values in self.history.items():
+                serializable_history[key] = [
+                    v.item() if isinstance(v, np.generic) else v for v in values
+                ]
             with open(self.json_path, 'w') as f:
-                json.dump(dict(self.history), f, indent=2)
+                json.dump(serializable_history, f, indent=2)
             if logger:
                 logger.info(f"✓ Training history saved to {self.json_path}")
         except Exception as e:
@@ -224,7 +229,7 @@ def print_training_header(logger: logging.Logger, config: dict):
 class ScaleHeadLoss(nn.Module):
     """尺度预测的组合损失函数"""
     
-    def __init__(self, loss_weights: dict = None):
+    def __init__(self, loss_weights: dict = None, loss_config: dict = None):
         """
         Args:
             loss_weights: 各损失项的权重
@@ -235,6 +240,13 @@ class ScaleHeadLoss(nn.Module):
             loss_weights = {'scale_loss': 1.0}
         
         self.loss_weights = loss_weights
+        if loss_config is None:
+            loss_config = {
+                'primary_loss': 'mse',
+                'smooth_l1_beta': 0.2,
+                'relative_l1_weight': 0.0,
+            }
+        self.loss_config = loss_config
     
     def forward(self, pred_scale: torch.Tensor, gt_scale: torch.Tensor,
                 log_pred: torch.Tensor = None) -> dict:
@@ -259,11 +271,29 @@ class ScaleHeadLoss(nn.Module):
         if log_pred is None:
             log_pred = torch.log(pred_scale + 1e-8)
         
-        scale_loss = F.mse_loss(log_pred, log_gt)
+        primary_loss = self.loss_config.get('primary_loss', 'mse').lower()
+        if primary_loss == 'mse':
+            scale_loss = F.mse_loss(log_pred, log_gt)
+        elif primary_loss in ('smooth_l1', 'huber'):
+            beta = float(self.loss_config.get('smooth_l1_beta', 0.2))
+            scale_loss = F.smooth_l1_loss(log_pred, log_gt, beta=beta)
+        elif primary_loss == 'l1':
+            scale_loss = F.l1_loss(log_pred, log_gt)
+        else:
+            raise ValueError(f"Unsupported primary_loss: {primary_loss}")
+
+        rel_l1_weight = float(self.loss_config.get('relative_l1_weight', 0.0))
+        rel_l1_loss = torch.mean(torch.abs(pred_scale - gt_scale) / (gt_scale + 1e-8))
+
+        total_loss = (
+            scale_loss * self.loss_weights['scale_loss']
+            + rel_l1_weight * rel_l1_loss
+        )
         
         losses = {
             'scale_loss': scale_loss,
-            'total_loss': scale_loss * self.loss_weights['scale_loss']
+            'relative_l1_loss': rel_l1_loss,
+            'total_loss': total_loss,
         }
         
         return losses
@@ -322,8 +352,13 @@ def train_epoch(
             
             pred_scale = predictions['scale_factor']  # [B, 1]
             
-            # 获取MLP直接输出的log_scale（避免exp→log数值往返）
-            log_pred = getattr(model.scale_head, '_last_log_scale', None)
+            # 仅当输出激活为 exp 时，MLP 直接输出可视为 log_scale。
+            # 对于 softplus 等其它激活，必须从 pred_scale 反算 log，
+            # 否则会导致 log-space 主损失目标不匹配。
+            output_activation = getattr(model.scale_head, 'output_activation_name', 'exp')
+            log_pred = None
+            if output_activation == 'exp':
+                log_pred = getattr(model.scale_head, '_last_log_scale', None)
             
             # 计算损失
             losses = loss_fn(pred_scale, gt_scale, log_pred=log_pred)
@@ -517,6 +552,14 @@ def train(config: dict, device: str):
         enable_point=False,
         enable_track=False,
         enable_scale_head=True,
+        scale_head_kwargs={
+            'hidden_dims': config.get('scale_head', {}).get('hidden_dims', [1024, 512]),
+            'dropout': config.get('scale_head', {}).get('dropout', 0.1),
+            'use_calibration_features': config.get('scale_head', {}).get('use_calibration_features', True),
+            'hidden_activation': config.get('scale_head', {}).get('hidden_activation', 'gelu'),
+            'output_activation': config.get('scale_head', {}).get('output_activation', 'exp'),
+            'log_scale_clip': config.get('scale_head', {}).get('log_scale_clip', None),
+        },
         merging=config['model'].get('merging', 0),
         merge_ratio=config['model'].get('merge_ratio', 0.9)
     )
@@ -575,7 +618,10 @@ def train(config: dict, device: str):
         T_max=config['training']['epochs']
     )
     
-    loss_fn = ScaleHeadLoss(loss_weights=config['training']['loss_weights'])
+    loss_fn = ScaleHeadLoss(
+        loss_weights=config['training']['loss_weights'],
+        loss_config=config['training'].get('loss_config', None),
+    )
     
     logger.info(f"✓ Optimizer: AdamW")
     logger.info(f"✓ Scheduler: CosineAnnealingLR (T_max={config['training']['epochs']})")

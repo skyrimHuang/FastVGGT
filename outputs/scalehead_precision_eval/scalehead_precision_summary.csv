@@ -1,0 +1,10 @@
+metric,value
+Num Samples,50
+Scale Error Mean (%),15.544
+Scale Error Median (%),12.195
+Scale Error Std (%),14.682
+Baseline ATE Mean (m),2154.783771
+Our Method ATE Mean (m),2154.866156
+ATE Relative Gap (%),0.00
+Mean Time Overhead (ms),67.04
+Max Time Overhead (ms),95.49

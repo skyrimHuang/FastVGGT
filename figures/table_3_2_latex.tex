@@ -1,0 +1,16 @@
+
+\begin{table}[htbp]
+\centering
+\caption{ScaleHead尺度恢复精度验证（KITTI Scene Flow验证集，N=50）}
+\label{tab:scalehead_evaluation}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Method} & \textbf{Scale Error (\%)} & \textbf{Abs Rel $\downarrow$} & \textbf{RMSE (m) $\downarrow$} & \textbf{$\delta<1.25$ $\uparrow$} & \textbf{Overhead (ms)} \\
+\midrule
+\textbf{Baseline:} Mono VGGT + Optimal Scale & - & 15.063 & 5497.6 & 2.7\% & - \\
+\textbf{Ours:} Stereo VGGT + ScaleHead & 15.54 ± 14.68 & \textbf{0.525} & 5503.5 & \textbf{21.9\%} & 107.7 \\
+\midrule
+\textbf{Relative Improvement} & - & \textcolor{ForestGreen}{\textbf{-96.5\%}} & +0.1\% & \textcolor{ForestGreen}{\textbf{8.2×}} & - \\
+\bottomrule
+\end{tabular}
+\end{table}

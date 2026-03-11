@@ -1,0 +1,53 @@
+# ==================== KITTI Stereo Scale Head Training Configuration (V3 - Round 2 Optimization) ====================
+# Target: Push mean scale error below 10%
+# Improvements:
+#   1. Increased training data (120 -> 160 samples)
+#   2. Softplus output activation (smoother than exp)
+#   3. Extended training (60 -> 100 epochs)
+#   4. Higher initial learning rate with longer warmup
+#   5. Reduced dropout (more data = less regularization needed)
+
+model:
+  ckpt_path: "/home/hba/Documents/FastVGGT/ckpt/model_tracker_fixed_e20.pt"
+  img_size: 518
+  patch_size: 14
+  embed_dim: 1024
+  merging: null
+  merge_ratio: 0.0
+
+data:
+  data_dir: "/home/hba/Documents/Dataset/KITTI"
+  original_size: [1242, 375]
+  target_size: [518, 392]
+  train_num: 150  # ↑ Increased from 120 (KITTI has 200 total, 150+50=200)
+  val_num: 50
+  batch_size: 12
+  num_workers: 4
+  enable_calib_cache: true
+  resize_interpolation: 'cubic'
+
+scale_head:
+  dim_in: 2048
+  hidden_dims: [1024, 512]
+  dropout: 0.03  # ↓ Reduced from 0.05 (more data allows less regularization)
+  use_calibration_features: true
+  hidden_activation: "silu"  # Keep silu (worked well in v2)
+  output_activation: "softplus"  # ↑ Changed from exp (smoother gradients, better stability)
+  log_scale_clip: null  # softplus 下禁用该裁剪，避免输出上限被错误限制
+
+training:
+  output_dir: "./outputs/kitti_scale_head_v3"
+  epochs: 100  # ↑ Extended from 60 (more data needs more training)
+  lr: 3.0e-4  # 使用与v2一致学习率，先确保稳定收敛
+  weight_decay: 5.0e-4
+  optimizer: "AdamW"
+  scheduler: "CosineAnnealingLR"
+  early_stopping_patience: 15  # ↑ Increased from 12 (give more time for convergence)
+  save_interval: 5
+  loss_weights:
+    scale_loss: 1.0
+  loss_config:
+    primary_loss: "smooth_l1"
+    smooth_l1_beta: 0.15
+    relative_l1_weight: 0.25
+

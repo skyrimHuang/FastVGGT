@@ -26,6 +26,7 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
         enable_depth=True,
         enable_track=False,
         enable_scale_head=False,
+        scale_head_kwargs=None,
         merging=0,
         merge_ratio=0.9,
         vis_attn_map=False,
@@ -71,8 +72,11 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
         )
         
         # KITTI stereo scale prediction head
+        if scale_head_kwargs is None:
+            scale_head_kwargs = {}
+
         self.scale_head = (
-            KITTIStereoScaleHead(dim_in=2 * embed_dim, use_calibration_features=True)
+            KITTIStereoScaleHead(dim_in=2 * embed_dim, **scale_head_kwargs)
             if enable_scale_head
             else None
         )

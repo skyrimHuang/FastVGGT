@@ -30,6 +30,7 @@ def fast_similarity_chunks(
 
 def do_nothing(
     x: torch.Tensor,
+    mode: str = None,
     extra_tensors=None,
     extra_tensors_2=None,
 ) -> Union[

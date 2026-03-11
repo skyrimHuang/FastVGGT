@@ -188,14 +188,14 @@ class KITTIStereoDataset:
         )
         
         # ========== 步骤5：计算GT scale标签 ==========
-        # gt_scale = baseline * focal_length / mean_valid_disparity
+        # gt_scale = baseline * focal_length / median_valid_disparity (改用median，更robust)
         # 其中focal_length是缩放后的值，确保与网络输出空间一致
         valid_mask = disp_resized > 0
         
         if valid_mask.sum() > 0:
-            mean_disp = disp_resized[valid_mask].mean()
+            median_disp = np.median(disp_resized[valid_mask])  # 改用median替代mean
             focal_length = calib['K_scaled'][0, 0]
-            gt_scale = calib['baseline'] * focal_length / mean_disp
+            gt_scale = calib['baseline'] * focal_length / median_disp
         else:
             # 如果没有有效的disparity像素，使用默认值
             gt_scale = 1.0

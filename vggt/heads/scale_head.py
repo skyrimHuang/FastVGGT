@@ -32,7 +32,10 @@ class KITTIStereoScaleHead(nn.Module):
         dim_in: int = 2048,
         hidden_dims: list = None,
         dropout: float = 0.1,
-        use_calibration_features: bool = True
+        use_calibration_features: bool = True,
+        hidden_activation: str = "gelu",
+        output_activation: str = "exp",
+        log_scale_clip: Optional[float] = None,
     ):
         """
         初始化ScaleHead
@@ -52,6 +55,18 @@ class KITTIStereoScaleHead(nn.Module):
         self.hidden_dims = hidden_dims
         self.dropout_rate = dropout
         self.use_calibration_features = use_calibration_features
+        self.hidden_activation_name = hidden_activation
+        self.output_activation_name = output_activation
+        self.log_scale_clip = log_scale_clip
+
+        if hidden_activation == "gelu":
+            hidden_act_layer = nn.GELU
+        elif hidden_activation == "silu":
+            hidden_act_layer = nn.SiLU
+        elif hidden_activation == "relu":
+            hidden_act_layer = nn.ReLU
+        else:
+            raise ValueError(f"Unsupported hidden_activation: {hidden_activation}")
         
         # 计算MLP输入维度
         # 左右特征拼接 + calibration特征（baseline, focal_scaled）
@@ -67,7 +82,7 @@ class KITTIStereoScaleHead(nn.Module):
             layers.extend([
                 nn.Linear(prev_dim, hidden_dim),
                 nn.LayerNorm(hidden_dim),
-                nn.GELU(),
+                hidden_act_layer(),
                 nn.Dropout(dropout)
             ])
             prev_dim = hidden_dim
@@ -137,8 +152,19 @@ class KITTIStereoScaleHead(nn.Module):
         # ========== MLP ==========
         log_scale = self.mlp(x)  # [B, 1]
         
-        # ========== 指数映射确保正值 ==========
-        scale = torch.exp(log_scale)  # [B, 1]
+        # log_scale_clip 是针对 exp(log_scale) 的数值稳定项。
+        # 对 softplus 而言，直接裁剪 log_scale 会把最终尺度硬限制在 softplus(clip)
+        # （例如 clip=4 时上限约 4.02），容易导致系统性低估。
+        if self.log_scale_clip is not None and self.output_activation_name == "exp":
+            log_scale = torch.clamp(log_scale, -self.log_scale_clip, self.log_scale_clip)
+
+        # ========== 输出激活确保正值 ==========
+        if self.output_activation_name == "exp":
+            scale = torch.exp(log_scale)  # [B, 1]
+        elif self.output_activation_name == "softplus":
+            scale = torch.nn.functional.softplus(log_scale) + 1e-6
+        else:
+            raise ValueError(f"Unsupported output_activation: {self.output_activation_name}")
         
         # 同时保存 log_scale 供 loss 直接使用（避免 exp→log 往返的数值误差）
         self._last_log_scale = log_scale

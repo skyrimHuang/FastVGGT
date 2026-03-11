@@ -1,0 +1,50 @@
+# ==================== KITTI Stereo Scale Head Training Configuration (V3B - Exp Fine-tune) ====================
+# Strategy:
+# 1) Keep stable exp output (best in v2)
+# 2) Increase training samples to 150
+# 3) Resume from v2 best checkpoint for warm start
+
+model:
+  ckpt_path: "/home/hba/Documents/FastVGGT/ckpt/model_tracker_fixed_e20.pt"
+  img_size: 518
+  patch_size: 14
+  embed_dim: 1024
+  merging: null
+  merge_ratio: 0.0
+
+data:
+  data_dir: "/home/hba/Documents/Dataset/KITTI"
+  original_size: [1242, 375]
+  target_size: [518, 392]
+  train_num: 150
+  val_num: 50
+  batch_size: 12
+  num_workers: 4
+  enable_calib_cache: true
+  resize_interpolation: 'cubic'
+
+scale_head:
+  dim_in: 2048
+  hidden_dims: [1024, 512]
+  dropout: 0.05
+  use_calibration_features: true
+  hidden_activation: "silu"
+  output_activation: "exp"
+  log_scale_clip: 4.0
+
+training:
+  output_dir: "./outputs/kitti_scale_head_v3b"
+  epochs: 80
+  lr: 1.5e-4
+  weight_decay: 5.0e-4
+  optimizer: "AdamW"
+  scheduler: "CosineAnnealingLR"
+  early_stopping_patience: 15
+  save_interval: 5
+  resume_ckpt_path: "./outputs/kitti_scale_head_v2/checkpoints/scale_head_best.pt"
+  loss_weights:
+    scale_loss: 1.0
+  loss_config:
+    primary_loss: "smooth_l1"
+    smooth_l1_beta: 0.15
+    relative_l1_weight: 0.25
