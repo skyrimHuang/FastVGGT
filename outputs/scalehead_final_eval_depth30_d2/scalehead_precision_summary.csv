@@ -1,0 +1,16 @@
+metric,value
+num_samples,50.0
+num_skipped,0.0
+scale_error_mean,13.596761075164743
+scale_error_median,12.004946844170181
+scale_error_std,11.537870552460554
+baseline_abs_rel_mean,0.7418484687805176
+baseline_rmse_mean,8.46299934387207
+baseline_a1_mean,0.20597389930292564
+ours_abs_rel_mean,0.4113558232784271
+ours_rmse_mean,7.128232002258301
+ours_a1_mean,0.288828036460548
+abs_rel_gap_pct,-44.549885392189026
+rmse_gap_pct,-15.77180027961731
+time_overhead_mean_ms,171.20582580566406
+time_overhead_max_ms,246.5214729309082

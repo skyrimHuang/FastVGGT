@@ -43,7 +43,13 @@ def _to_python_types(obj):
 
 # ==================== 评估指标 ====================
 
-def compute_depth_metrics(pred_depth: np.ndarray, gt_depth: np.ndarray, valid_mask: np.ndarray) -> Dict[str, float]:
+def compute_depth_metrics(
+    pred_depth: np.ndarray,
+    gt_depth: np.ndarray,
+    valid_mask: np.ndarray,
+    min_depth: float,
+    max_depth: float,
+) -> Dict[str, float]:
     """
     计算深度估计指标
     
@@ -55,8 +61,17 @@ def compute_depth_metrics(pred_depth: np.ndarray, gt_depth: np.ndarray, valid_ma
     Returns:
         metrics: dict of float
     """
-    pred = pred_depth[valid_mask]
-    gt = gt_depth[valid_mask]
+    metric_mask = (
+        valid_mask
+        & np.isfinite(pred_depth)
+        & np.isfinite(gt_depth)
+        & (pred_depth > 0)
+        & (gt_depth >= min_depth)
+        & (gt_depth <= max_depth)
+    )
+
+    pred = pred_depth[metric_mask]
+    gt = gt_depth[metric_mask]
     
     if len(pred) == 0:
         return {
@@ -102,6 +117,7 @@ def evaluate_scalehead_precision(args):
     print("\n" + "="*80)
     print("  ScaleHead 双目绝对尺度恢复精度验证（3.3.2节）- V2简化版")
     print("="*80 + "\n")
+    print(f"  评估过滤: min_disp>{args.min_disp}, depth_range=[{args.min_depth}, {args.max_depth}] m\n")
     
     # ========== 1. 加载模型 ==========
     print("[1/4] 加载模型...")
@@ -164,7 +180,7 @@ def evaluate_scalehead_precision(args):
             model.update_patch_dimensions(W // 14, H // 14)
             
             disp_gt = sample['disparity']
-            valid_disp = disp_gt > 0
+            valid_disp = disp_gt > args.min_disp
             if valid_disp.sum() < 100:
                 skipped += 1
                 continue
@@ -175,8 +191,9 @@ def evaluate_scalehead_precision(args):
             
             # ===== Baseline: 单目VGGT + 最优缩放因子 (Least Squares) =====
             t_baseline_start = time.time()
-            with torch.autocast(device_type='cuda' if 'cuda' in device else 'cpu', dtype=torch.float16):
-                pred_baseline = model(images_mono_left, calibration_batch=None)
+            with torch.no_grad():
+                with torch.autocast(device_type='cuda' if 'cuda' in device else 'cpu', dtype=torch.float16):
+                    pred_baseline = model(images_mono_left, calibration_batch=None)
             t_baseline = (time.time() - t_baseline_start) * 1000
             
             depth_baseline_norm = pred_baseline['depth'][0, 0].detach().float().cpu().numpy().squeeze(-1)
@@ -187,12 +204,19 @@ def evaluate_scalehead_precision(args):
             scale_optimal = find_optimal_scale_ls(pred_valid, gt_valid)
             depth_baseline_metric = depth_baseline_norm * scale_optimal
             
-            metrics_baseline = compute_depth_metrics(depth_baseline_metric, depth_gt, valid_disp)
+            metrics_baseline = compute_depth_metrics(
+                depth_baseline_metric,
+                depth_gt,
+                valid_disp,
+                args.min_depth,
+                args.max_depth,
+            )
             
             # ===== Our Method: 双目VGGT + ScaleHead =====
             t_ours_start = time.time()
-            with torch.autocast(device_type='cuda' if 'cuda' in device else 'cpu', dtype=torch.float16):
-                pred_ours = model(images_stereo, calibration_batch=calib_features)
+            with torch.no_grad():
+                with torch.autocast(device_type='cuda' if 'cuda' in device else 'cpu', dtype=torch.float16):
+                    pred_ours = model(images_stereo, calibration_batch=calib_features)
             t_ours = (time.time() - t_ours_start) * 1000
             
             if 'scale_factor' not in pred_ours:
@@ -205,7 +229,13 @@ def evaluate_scalehead_precision(args):
             depth_ours_norm = pred_ours['depth'][0, 0].detach().float().cpu().numpy().squeeze(-1)
             depth_ours_metric = depth_ours_norm * pred_scale
             
-            metrics_ours = compute_depth_metrics(depth_ours_metric, depth_gt, valid_disp)
+            metrics_ours = compute_depth_metrics(
+                depth_ours_metric,
+                depth_gt,
+                valid_disp,
+                args.min_depth,
+                args.max_depth,
+            )
             
             # 记录结果
             results_per_sample.append({
@@ -227,6 +257,10 @@ def evaluate_scalehead_precision(args):
                 'time_ours_ms': t_ours,
                 'time_overhead_ms': t_ours - t_baseline,
             })
+
+            del pred_baseline, pred_ours
+            if device.startswith('cuda'):
+                torch.cuda.empty_cache()
         
         except Exception as e:
             print(f"  ⚠ Error processing sample {idx}: {e}")
@@ -363,6 +397,12 @@ def main():
                         help="ScaleHead输出激活函数")
     parser.add_argument("--log_scale_clip", type=float, default=None,
                         help="log_scale裁剪阈值，None为不裁剪")
+    parser.add_argument("--min_disp", type=float, default=1.0,
+                        help="有效视差下限（像素），用于过滤超远点")
+    parser.add_argument("--min_depth", type=float, default=0.1,
+                        help="评估最小深度（米）")
+    parser.add_argument("--max_depth", type=float, default=80.0,
+                        help="评估最大深度（米）")
     
     args = parser.parse_args()
     
