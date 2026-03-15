@@ -1,6 +1,6 @@
 """
 根据公式
-r_l=min(r_max, max(r_min, C_base(l) * (1 - beta * max(0, S - S_base))))
+r_l=min(r_max, max(r_min, C_base(l) * (1 + beta * max(0, S - S_base))))
 绘制三维网格图：x轴为层号l，y轴为序列长度S，z轴为r。
 
 使用方式示例：
@@ -67,8 +67,8 @@ def compute_r_grid(
     r_max: float,
 ) -> np.ndarray:
     """按给定公式计算r网格。"""
-    penalty = 1.0 - beta * (s_grid - s_base)
-    raw_r = cbase_grid * penalty
+    growth = 1.0 + beta * np.maximum(0.0, s_grid - s_base)
+    raw_r = cbase_grid * growth
     clipped_r = np.clip(raw_r, r_min, r_max)
     return clipped_r
 

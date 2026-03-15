@@ -426,13 +426,18 @@ def main():
     # 加载或生成数据
     results_csv = args.results_dir / 'beta_grid_search_results.csv'
     
-    if args.use_mock or not results_csv.exists():
+    if args.use_mock:
         print("📊 使用模拟数据演示分析流程...")
         results_df = create_mock_beta_results(num_betas=5, num_scenes=10)
         results_csv.parent.mkdir(parents=True, exist_ok=True)
         results_df.to_csv(results_csv, index=False)
         print(f"   已生成模拟数据: {results_csv}")
     else:
+        if not results_csv.exists():
+            raise FileNotFoundError(
+                f"未找到实验结果文件: {results_csv}。"
+                "请先运行真实β搜索，或显式传入 --use_mock（仅演示）。"
+            )
         print(f"📂 加载实验结果: {results_csv}")
         results_df = pd.read_csv(results_csv)
     
