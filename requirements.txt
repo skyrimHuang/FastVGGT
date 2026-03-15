@@ -9,7 +9,7 @@ evo
 open3d
 matplotlib
 scipy
-opencv-python
+opencv-contrib-python
 scikit-image
 tqdm
 trimesh
