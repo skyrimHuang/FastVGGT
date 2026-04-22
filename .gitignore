@@ -17,6 +17,7 @@ logs/
 eval_results/
 .vscode/
 .curosr/
+demo_output/
 
 # C extensions
 *.so
